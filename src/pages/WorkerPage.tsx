@@ -11,12 +11,14 @@ import {
   MapPinOff,
   Mic,
   OctagonAlert,
+  Pause,
   Play,
   Radio,
   RotateCcw,
   Thermometer,
   Wrench,
 } from 'lucide-react';
+import { GlobalLanguagePicker } from '../components/GlobalLanguagePicker';
 import { AnimatedMetric } from '../components/PageTransition';
 import { SparklineChart } from '../components/SparklineChart';
 import { VoiceIncidentRecorder } from '../components/VoiceIncidentRecorder';
@@ -26,10 +28,15 @@ import {
   WearableAlertSpecColumn,
 } from '../components/WearableAlertTelemetryPanels';
 import { WorkerVoiceAlertBar } from '../components/WorkerVoiceAlertBar';
-import { useWorkerVoiceAlerts } from '../hooks/useWorkerVoiceAlerts';
+import { useAbuDhabiClock } from '../hooks/useAbuDhabiClock';
+import {
+  useWorkerVoiceAlerts,
+  type GlobalLanguageOverride,
+} from '../hooks/useWorkerVoiceAlerts';
 import { getTierTokens, SG_SURFACES } from '../shared/designTokens';
 import { synthesizeGemma4EdgeObservation } from '../shared/edgeWeatherFallback';
 import { predictCompositeTrajectory } from '../shared/forecastEngine';
+import type { GlobalLanguageOption } from '../shared/globalLanguages';
 import { assessWorkerHeatRisk } from '../shared/riskEngine';
 import { formatTemperature, type TemperatureUnit } from '../shared/temperature';
 import {
@@ -40,10 +47,12 @@ import {
   type EnvironmentalObservation,
   type FaultFlags,
   type SupportedLanguage,
+  type WorkerAlertCopy,
   type WorkerStateSelf,
 } from '../shared/types';
 import {
   WEARABLE_SPEC_TELEMETRY,
+  getWearableAlertSpecCopy,
   type WearableAlertStateId,
 } from '../shared/wearableAlertSpecs';
 
@@ -93,6 +102,14 @@ function buildColdOfflineWorkerState(
     sensorNoise: false,
     gpsLoss: false,
   };
+  const offlineBatteryByWorker: Record<string, number> = {
+    'W-101': 95,
+    'W-102': 79,
+    'W-103': 92,
+    'W-104': 68,
+    'W-105': 89,
+    'W-106': 84,
+  };
   const frame: BLETelemetryFrame = {
     deviceId: context.deviceId,
     workerId,
@@ -100,7 +117,7 @@ function buildColdOfflineWorkerState(
     hrBpm: 94,
     skinTempC: 34.1,
     exertionIndex: 5.5,
-    batteryPct: 86,
+    batteryPct: offlineBatteryByWorker[workerId] ?? 91,
     rssiDbm: -61,
     gpsFix: true,
     signalQuality: 0.97,
@@ -213,7 +230,11 @@ export function WorkerPage({ env, tempUnit }: WorkerPageProps) {
   const [simulatorOpen, setSimulatorOpen] = useState(false);
   const [showBleJson, setShowBleJson] = useState(false);
   const [alertPreviewState, setAlertPreviewState] = useState<WearableAlertStateId>('live');
+  const [globalOverride, setGlobalOverride] = useState<GlobalLanguageOverride | null>(null);
+  const [translatingGlobal, setTranslatingGlobal] = useState(false);
+  const [autoSimRunning, setAutoSimRunning] = useState(false);
   const forecastSectionRef = useRef<HTMLDivElement | null>(null);
+  const clock = useAbuDhabiClock();
 
   // Local slider mirrors inside collapsed Developer / BLE Simulator drawer
   const [hrSlider, setHrSlider] = useState(120);
@@ -225,6 +246,7 @@ export function WorkerPage({ env, tempUnit }: WorkerPageProps) {
     workerState,
     alertPreviewState,
     tempUnit,
+    globalLanguageOverride: globalOverride,
   });
 
   const getActiveOfflineEnv = useCallback(
@@ -380,6 +402,7 @@ export function WorkerPage({ env, tempUnit }: WorkerPageProps) {
 
   const handleLanguageChange = async (language: SupportedLanguage) => {
     if (!workerState) return;
+    setGlobalOverride(null);
     setUpdating(true);
     try {
       const res = await fetch(`/api/worker/${workerState.context.workerId}/language`, {
@@ -400,6 +423,74 @@ export function WorkerPage({ env, tempUnit }: WorkerPageProps) {
       setWorkerState(localNext);
     } finally {
       setUpdating(false);
+    }
+  };
+
+  const handleSelectGlobalLanguage = async (option: GlobalLanguageOption) => {
+    if (!workerState) return;
+    if (
+      alertPreviewState === 'live' &&
+      SUPPORTED_LANGUAGES.includes(option.code as SupportedLanguage)
+    ) {
+      await handleLanguageChange(option.code as SupportedLanguage);
+      return;
+    }
+
+    setTranslatingGlobal(true);
+    try {
+      const specOverride =
+        alertPreviewState !== 'live'
+          ? (() => {
+              const sCopy = getWearableAlertSpecCopy(
+                alertPreviewState,
+                workerState.context.preferredLanguage,
+                tempUnit
+              );
+              return {
+                headline: sCopy.headline,
+                explanation: sCopy.secondaryDetail,
+                action: sCopy.action,
+                proactiveForecastNote: null,
+              };
+            })()
+          : undefined;
+
+      const res = await fetch(`/api/worker/${workerState.context.workerId}/translate-global`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: option.code,
+          name: option.name,
+          nativeName: option.nativeName,
+          baseCopyOverride: specOverride,
+        }),
+      });
+      if (!res.ok) throw new Error('Global translation failed');
+      const data = (await res.json()) as {
+        translation: WorkerAlertCopy;
+        state?: WorkerStateSelf;
+      };
+      if (data.state) {
+        persistWorkerState(data.state);
+        setWorkerState(data.state);
+      }
+      setGlobalOverride({
+        option,
+        copy: data.translation,
+      });
+    } catch {
+      const fallbackCopy =
+        workerState.alertTranslations[workerState.context.preferredLanguage] ??
+        workerState.alertTranslations.en;
+      setGlobalOverride({
+        option,
+        copy: {
+          ...fallbackCopy,
+          explanation: `${option.nativeName} (${option.name}) edge guidance active.`,
+        },
+      });
+    } finally {
+      setTranslatingGlobal(false);
     }
   };
 
@@ -492,6 +583,15 @@ export function WorkerPage({ env, tempUnit }: WorkerPageProps) {
     }
   };
 
+  useEffect(() => {
+    if (!autoSimRunning) return;
+    const id = window.setInterval(() => {
+      void handleSimStep('step_3m');
+    }, 4000);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSimRunning, workerState?.context.workerId, workerState?.simulatedClockMin]);
+
   if (loading && !workerState) {
     return (
       <main className="max-w-[1280px] mx-auto px-6 py-8">
@@ -515,8 +615,10 @@ export function WorkerPage({ env, tempUnit }: WorkerPageProps) {
 
   const { context, assessment, forecast, faults, latestFrame, alertTranslations } = workerState;
   const lang = context.preferredLanguage;
-  const copy = alertTranslations[lang] ?? alertTranslations.en;
-  const isRtl = isRtlLanguage(lang);
+  const baseCopy = alertTranslations[lang] ?? alertTranslations.en;
+  const copy = globalOverride?.copy ?? baseCopy;
+  const activeLanguageNative = globalOverride?.option.nativeName ?? LANGUAGE_LABELS[lang].native;
+  const isRtl = globalOverride?.option.rtl ?? isRtlLanguage(lang);
   const tierTokens = getTierTokens(assessment.tier);
 
   return (
@@ -530,7 +632,8 @@ export function WorkerPage({ env, tempUnit }: WorkerPageProps) {
           <p className="text-sm text-slate-400 mt-1">
             <span className="font-mono text-[#787aff] font-semibold">{context.workerId}</span> ·{' '}
             {context.roleLabel} · {context.zone} · {context.ppeLevel} ·{' '}
-            <span className="font-mono tabular-nums">{context.acclimatizationDays}d</span> acclimatized
+            <span className="font-mono tabular-nums">{context.acclimatizationDays}d</span> acclimatized ·{' '}
+            <span className="font-mono text-emerald-300">{clock.timeWithSeconds} GST</span>
           </p>
         </div>
 
@@ -541,7 +644,10 @@ export function WorkerPage({ env, tempUnit }: WorkerPageProps) {
           <select
             id="worker-select"
             value={selectedWorkerId}
-            onChange={(e) => setSelectedWorkerId(e.target.value)}
+            onChange={(e) => {
+              setGlobalOverride(null);
+              setSelectedWorkerId(e.target.value);
+            }}
             className="bg-[#141821] border border-white/15 rounded-xl px-3.5 py-2 text-sm font-medium text-slate-100 focus:outline-none focus:border-[#787aff] cursor-pointer"
           >
             {(workers.length > 0
@@ -560,6 +666,7 @@ export function WorkerPage({ env, tempUnit }: WorkerPageProps) {
       <AlertStateSwitcher
         activeState={alertPreviewState}
         onChangeState={(next) => {
+          setGlobalOverride(null);
           setAlertPreviewState(next);
           if (next !== 'live') {
             setAodMode(false);
@@ -731,9 +838,16 @@ export function WorkerPage({ env, tempUnit }: WorkerPageProps) {
               alertState={alertPreviewState}
               language={lang}
               onChangeLanguage={handleLanguageChange}
+              globalLanguageOverride={globalOverride}
+              translatingGlobal={translatingGlobal}
+              onSelectGlobalLanguage={handleSelectGlobalLanguage}
+              onClearGlobalLanguage={() => setGlobalOverride(null)}
               tempUnit={tempUnit}
               updating={updating}
-              onBackToLive={() => setAlertPreviewState('live')}
+              onBackToLive={() => {
+                setGlobalOverride(null);
+                setAlertPreviewState('live');
+              }}
               onDispatchRealSos={() => handleCheckIn('help')}
               hydrationCount={context.hydrationCount}
               onLogHydrationCheckIn={() => handleCheckIn('okay')}
@@ -765,7 +879,7 @@ export function WorkerPage({ env, tempUnit }: WorkerPageProps) {
             <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-white/10">
               <div className="flex flex-wrap items-center gap-2.5">
                 <span className="text-xs font-mono uppercase tracking-wider text-slate-400">
-                  Wearable Safety Guidance ({LANGUAGE_LABELS[lang].native})
+                  Wearable Safety Guidance ({activeLanguageNative})
                 </span>
                 <span
                   className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg border text-[11px] font-mono font-semibold ${tierTokens.pillClass}`}
@@ -790,7 +904,7 @@ export function WorkerPage({ env, tempUnit }: WorkerPageProps) {
                     disabled={updating}
                     onClick={() => handleLanguageChange(code)}
                     className={`px-2.5 py-1.5 text-xs font-medium rounded-lg transition-all active:scale-[0.99] cursor-pointer whitespace-nowrap ${
-                      lang === code
+                      !globalOverride && lang === code
                         ? 'bg-[#787aff] text-white shadow-xs'
                         : 'text-slate-300 hover:text-white'
                     }`}
@@ -799,6 +913,15 @@ export function WorkerPage({ env, tempUnit }: WorkerPageProps) {
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div className="mt-3">
+              <GlobalLanguagePicker
+                activeGlobalLang={globalOverride?.option ?? null}
+                translating={translatingGlobal}
+                onSelectGlobalLanguage={handleSelectGlobalLanguage}
+                onClearGlobalLanguage={() => setGlobalOverride(null)}
+              />
             </div>
 
             <div className="mt-4" dir={isRtl ? 'rtl' : 'ltr'}>
@@ -893,22 +1016,52 @@ export function WorkerPage({ env, tempUnit }: WorkerPageProps) {
             onToggleEnabled={voiceAlerts.setEnabled}
             speaking={voiceAlerts.speaking}
             language={lang}
+            globalLanguageOption={globalOverride?.option ?? null}
             evaluation={voiceAlerts.evaluation}
             lastSpokenAlert={voiceAlerts.lastSpokenAlert}
+            audioRef={voiceAlerts.audioRef}
             onSpeakNow={voiceAlerts.speakNow}
             onStopSpeaking={voiceAlerts.stopSpeaking}
           />
 
-          {/* Simulated Clock Controls */}
+          {/* Simulated Clock & Live Abu Dhabi Watch Stream Controls */}
           <div className={`${SG_SURFACES.panel} p-5`}>
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center gap-2 text-xs text-slate-300">
                 <Clock className="w-4 h-4 text-[#787aff] shrink-0" />
-                <span>
-                  Advance simulated shift time to watch the watch face forecast &amp; crossing update live:
-                </span>
+                <div>
+                  <span>
+                    Advance simulated shift time to watch the watch face forecast &amp; crossing update live:
+                  </span>
+                  <div className="text-[11px] font-mono text-slate-400 mt-0.5">
+                    Abu Dhabi {clock.timeWithSeconds} GST · Shift T+{workerState.simulatedClockMin}m · Watch Battery {Math.round(latestFrame.batteryPct)}%
+                  </div>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  data-testid="auto-sim-toggle-btn"
+                  aria-pressed={autoSimRunning}
+                  onClick={() => setAutoSimRunning((r) => !r)}
+                  className={`px-3.5 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                    autoSimRunning
+                      ? 'bg-[#10b981]/20 border-[#10b981] text-emerald-200'
+                      : 'bg-[#0c111d] border-white/15 text-slate-200 hover:border-[#787aff]'
+                  }`}
+                >
+                  {autoSimRunning ? (
+                    <>
+                      <Pause className="w-3.5 h-3.5 text-emerald-300" />
+                      <span>Live Sim: ON</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-3.5 h-3.5 text-[#787aff]" />
+                      <span>Auto-Run Live</span>
+                    </>
+                  )}
+                </button>
                 <button
                   type="button"
                   disabled={updating}
@@ -929,7 +1082,10 @@ export function WorkerPage({ env, tempUnit }: WorkerPageProps) {
                 <button
                   type="button"
                   disabled={updating}
-                  onClick={() => handleSimStep('reset_cool')}
+                  onClick={() => {
+                    setAutoSimRunning(false);
+                    void handleSimStep('reset_cool');
+                  }}
                   className={`${SG_SURFACES.buttonSecondary} px-3.5 py-2 text-xs text-slate-300 flex items-center gap-1`}
                 >
                   <RotateCcw className="w-3.5 h-3.5" />

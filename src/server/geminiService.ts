@@ -24,9 +24,10 @@ import {
  * Server-Side Gemini API Service for SiteGuard (GenOS Team).
  *
  * Covers:
- *  1. explainWorkerRisk & translateWorkerAlert — 9 Dubai/UAE languages (en/ar/hi/ur/bn/tl/ta/ml/ne), cached (gemini-4-hydrogen)
+ *  1. explainWorkerRisk & translateWorkerAlert — 10 Dubai/UAE languages (en/ar/hi/ur/bn/tl/ta/ml/ne/si), cached (gemini-4-hydrogen)
  *  2. transcribeWorkerVoiceIncident — Voice incident intake (gemini-3.5-transcribe)
- *  3. generateSupervisorShiftBriefing — Privacy-safe AI crew triage & rotation strategy (gemini-4-hydrogen)
+ *  3. synthesizeWorkerSpeech — Multilingual Cloud TTS (gemini-3.8-flash-lite-tts)
+ *  4. generateSupervisorShiftBriefing — Privacy-safe AI crew triage & rotation strategy (gemini-4-hydrogen)
  *  4. generateComplianceNarrative — Bilingual EN/AR UAE MOHRE audit briefing + remediation checklist (gemini-4-hydrogen)
  *  5. generateSyntheticCohortViaGemini — Synthetic physiological cohort generation (gemini-4-hydrogen)
  *  6. generateValidationAiInsights — Post-hoc clinical/ablation analysis for Backtest & Forecast Validation (gemini-4-hydrogen)
@@ -36,13 +37,15 @@ import {
  */
 
 let cachedClient: GoogleGenAI | null = null;
+let cachedClientKey: string | null = null;
 
 function getClient(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
     return null;
   }
-  if (!cachedClient) {
+  if (!cachedClient || cachedClientKey !== apiKey) {
+    cachedClientKey = apiKey;
     cachedClient = new GoogleGenAI({
       apiKey,
       httpOptions: {
@@ -59,6 +62,7 @@ function getClient(): GoogleGenAI | null {
 const alertCache = new Map<string, Record<SupportedLanguage, WorkerAlertCopy>>();
 const fallbackCooldown = new Map<string, { data: Record<SupportedLanguage, WorkerAlertCopy>; expiresAt: number }>();
 const inFlightAlerts = new Map<string, Promise<Record<SupportedLanguage, WorkerAlertCopy>>>();
+const ttsAudioCache = new Map<string, { audioBase64: string; mimeType: string; voiceName: string }>();
 let dailyQuotaCooldownUntil = 0;
 let transientCooldownUntil = 0;
 let lastGeminiDiagnostic: string = 'ok';
@@ -66,6 +70,7 @@ let lastGeminiDiagnostic: string = 'ok';
 export function clearAlertTranslationCache(): void {
   alertCache.clear();
   fallbackCooldown.clear();
+  ttsAudioCache.clear();
 }
 
 export function resetGeminiCircuitBreaker(): void {
@@ -173,6 +178,7 @@ const NO_CROSSING_PROJECTED_COPY: Record<SupportedLanguage, string> = {
   ta: 'தற்போதைய போக்கின் படி ஆம்பர் அல்லது சிவப்பு அபாய எல்லையைத் தாண்டும் நிலை இல்லை.',
   ml: 'നിലവിലെ പ്രവണത അനുസരിച്ച് ആംബർ അല്ലെങ്കിൽ റെഡ് പരിധി കടക്കാൻ സാധ്യതയില്ല.',
   ne: 'हालको ट्रेन्ड अनुसार एम्बर वा रातो सीमा पार हुने अनुमान छैन।',
+  si: 'වත්මන් ප්‍රවණතාව අනුව දැනට ඇම්බර් හෝ රතු සීමාව ඉක්මවීමක් අපේක්ෂා නොකෙරේ.',
 };
 
 const INSUFFICIENT_TREND_COPY: Record<SupportedLanguage, string> = {
@@ -185,6 +191,7 @@ const INSUFFICIENT_TREND_COPY: Record<SupportedLanguage, string> = {
   ta: 'முன்னறிவிப்புக்குப் போதுமான தரவு இல்லை — வழக்கமான இடைவேளைகளைப் பின்பற்றவும்.',
   ml: 'പ്രവചനത്തിന് ആവശ്യമായ ട്രെൻഡ് ഡാറ്റ ലഭ്യമല്ല — നിശ്ചിത ഇടവേളകളിൽ വിശ്രമിക്കുക.',
   ne: 'पूर्वानुमानका लागि पर्याप्त ट्रेन्ड डेटा छैन — नियमित विश्राम समय पालना गर्नुहोस्।',
+  si: 'පුරෝකථනය සඳහා ප්‍රමාණවත් දත්ත නොමැත — නියමිත විවේක කාලසටහන අනුගමනය කරන්න.',
 };
 
 function buildLocalizedProactiveNote(
@@ -220,6 +227,8 @@ function buildLocalizedProactiveNote(
         return `നിലവിലെ വേഗത്തിൽ ~${amberEta} മിനിറ്റിനുള്ളിൽ ആംബർ പരിധിയിലെത്താം — ${context.plannedBreakTime} വരെ കാക്കാതെ തണലിൽ വിശ്രമം തുടങ്ങുക.`;
       case 'ne':
         return `हालको गतिमा ~${amberEta} मिनेटमा एम्बर स्तर पुग्न सक्छ — ${context.plannedBreakTime} नकुरी छिट्टै छायामा विश्राम सुरु गर्नुहोस्।`;
+      case 'si':
+        return `වත්මන් වේගය අනුව විනාඩි ~${amberEta} කින් ඇම්බර් සීමාවට ළඟා විය හැකිය — ${context.plannedBreakTime} තෙක් නොසිට දැන්ම සෙවණේ විවේක ගන්න.`;
     }
   }
 
@@ -243,6 +252,8 @@ function buildLocalizedProactiveNote(
         return `ചൂട് സമ്മർദ്ദം ഉയരുന്നു; ഇപ്പോൾ തണലിൽ വിശ്രമിച്ചില്ലെങ്കിൽ ~${redEta} മിനിറ്റിൽ റെഡ് സ്റ്റോപ്പ്-വർക്ക് പരിധി എത്തിയേക്കാം.`;
       case 'ne':
         return `तापीय दबाब बढ्दैछ; अहिले छायामा आराम नगरे ~${redEta} मिनेटमा रातो काम-रोक सीमा पुग्न सक्छ।`;
+      case 'si':
+        return `තාප පීඩනය ඉහළ යමින් පවතී; දැන් සෙවණේ විවේක නොගතහොත් විනාඩි ~${redEta} කින් රතු වැඩ නැවැත්වීමේ සීමාවට ළඟා විය හැකිය.`;
     }
   }
 
@@ -515,7 +526,35 @@ export function buildDeterministicFallback(
             cached: false,
           };
 
-  return { en: baseEn, ar, hi, ur, bn, tl, ta, ml, ne };
+  const si: WorkerAlertCopy =
+    assessment.tier === 'Red'
+      ? {
+          headline: 'වැඩ වහාම නවතන්න — සිසිල් වන්න',
+          explanation: `${context.zone} ප්‍රදේශයේ ඉහළ තාප පීඩනයක් හඳුනාගෙන ඇත.`,
+          action: 'වහාම AC සෙවණ විවේකාගාරයට ගොස් PPE ලිහිල් කර සිසිල් ජලය පානය කරන්න.',
+          proactiveForecastNote: buildLocalizedProactiveNote('si', context, assessment, forecast),
+          source: 'template_fallback',
+          cached: false,
+        }
+      : assessment.tier === 'Amber'
+        ? {
+            headline: 'සෙවණේ විවේක ගෙන ජලය පානය කරන්න',
+            explanation: `${context.zone} ප්‍රදේශයේ තාප පීඩනය වැඩි වෙමින් පවතී.`,
+            action: 'දැන්ම විනාඩි 15ක් සෙවණේ විවේක ගෙන සිසිල් ජලය 300 ml පානය කරන්න.',
+            proactiveForecastNote: buildLocalizedProactiveNote('si', context, assessment, forecast),
+            source: 'template_fallback',
+            cached: false,
+          }
+        : {
+            headline: 'වැඩ කිරීමට ආරක්ෂිතයි — ජලය පානය කරන්න',
+            explanation: `${context.zone} ප්‍රදේශයේ තාප මට්ටම ආරක්ෂිත සීමාව තුළ පවතී.`,
+            action: 'සාමාන්‍ය වේගයෙන් වැඩ කරමින් සෑම විනාඩි 20 කට වරක් ජලය පානය කරන්න.',
+            proactiveForecastNote: buildLocalizedProactiveNote('si', context, assessment, forecast),
+            source: 'template_fallback',
+            cached: false,
+          };
+
+  return { en: baseEn, ar, hi, ur, bn, tl, ta, ml, ne, si };
 }
 
 function normalizeUnicodeDigits(input: string): string {
@@ -540,10 +579,11 @@ function extractEtaMinutesFromText(raw: string, stripHydrationBreaks: boolean): 
     // Do not confuse routine hydration/rest directives ("every 20 min", "15-min rest break") with crossing ETAs
     text = text
       .replace(
-        /(?:every|per|كل|प्रत्येक|हर|ہر|প্রতি|tuwing|ஒவ்வொரு|ഓരോ|हरेक)\s+\d+\s*(?:min(?:ute)?s?|m\b|دقيقة|دقائق|मिनट|منٹ|مِنٹ|মিনিট|minuto|நிமிட[^\s,.]*|മിനിറ്റ്|മിനിറ്റിലും|मिनेट)/gi,
+        /(?:every|per|كل|प्रत्येक|हर|ہر|প্রতি|tuwing|ஒவ்வொரு|ഓരോ|हरेक|සෑම)\s+(?:විනාඩි|මිනිත්තු)?\s*\d+\s*(?:min(?:ute)?s?|m\b|دقيقة|دقائق|मिनट|منٹ|مِنٹ|মিনিট|minuto|நிமிட[^\s,.]*|മിനിറ്റ്|മിനിറ്റിലും|मिनेट|කට\s*වරක්)?/gi,
         ' '
       )
       .replace(/\d+\s*நிமிட[^\s,.]*\s+ஒருமுறை/gi, ' ')
+      .replace(/(?:විනාඩි|මිනිත්තු)\s+\d+\s*(?:කට\s*වරක්|ක්)?/gi, ' ')
       .replace(
         /\b\d+[-\s]+(?:min(?:ute)?s?|m\b|دقيقة|دقائق|मिनट|منٹ|مِنٹ|মিনিট|minuto|நிமிட(?:ம்)?|മിനിറ്റ്|मिनेट)\s+(?:rest|shade|break|shaded)/gi,
         ' '
@@ -552,7 +592,7 @@ function extractEtaMinutesFromText(raw: string, stripHydrationBreaks: boolean): 
 
   const values: number[] = [];
   const unitRegex =
-    /~?\s*(\d+(?:\.\d+)?)\s*(?:min(?:ute)?s?|m\b|دقيقة|دقائق|मिनट|منٹ|مِنٹ|মিনিট|minuto|நிமிட(?:ம்|த்தில்|ங்களில்)?|മിനിറ്റ്|മിനിറ്റിൽ|मिनेट)/gi;
+    /~?\s*(\d+(?:\.\d+)?)\s*(?:min(?:ute)?s?|m\b|دقيقة|دقائق|मिनट|منٹ|مِنٹ|মিনিট|minuto|நிமிட(?:ம்|த்தில்|ங்களில்)?|മിനിറ്റ്|മിനിറ്റിൽ|मिनेट|විනාඩි|මිනිත්තු)/gi;
   let m: RegExpExecArray | null;
   while ((m = unitRegex.exec(text)) !== null) {
     const val = Number(m[1]);
@@ -560,8 +600,14 @@ function extractEtaMinutesFromText(raw: string, stripHydrationBreaks: boolean): 
   }
 
   const crossingPhraseRegex =
-    /(?:amber|red|threshold|limit|البرتقالي|الأحمر|अंबर|गंभीर|امبر|سرخ|সতর্ক|গুরুতর|ஆம்பர்|சிவப்பு|ആംബർ|റെഡ്|एम्बर|रातो)\s+(?:in|within|after|sa|خلال)\s+~?(\d+(?:\.\d+)?)\b/gi;
+    /(?:amber|red|threshold|limit|البرتقالي|الأحمر|अंबर|गंभीर|امبر|سرخ|সতর্ক|গুরুতর|ஆம்பர்|சிவப்பு|ആംബർ|റെഡ്|एम्बर|रातो|ඇම්බර්|රතු)\s+(?:in|within|after|sa|خلال)\s+~?(\d+(?:\.\d+)?)\b/gi;
   while ((m = crossingPhraseRegex.exec(text)) !== null) {
+    const val = Number(m[1]);
+    if (Number.isFinite(val)) values.push(val);
+  }
+
+  const siPrefixRegex = /(?:විනාඩි|මිනිත්තු)\s*~?(\d+(?:\.\d+)?)\s*(?:කින්|කට)?/gi;
+  while ((m = siPrefixRegex.exec(text)) !== null) {
     const val = Number(m[1]);
     if (Number.isFinite(val)) values.push(val);
   }
@@ -570,11 +616,11 @@ function extractEtaMinutesFromText(raw: string, stripHydrationBreaks: boolean): 
 }
 
 const THRESHOLD_CROSSING_INTENT_REGEX =
-  /amber|red|threshold|cross|reach|projected|forecast|escalat|stop-work|البرتقالي|الأحمر|متوقع|تجاوز|अंबर|गंभीर|संभावित|امبر|متوقع|سنگین|সতর্ক|গুরুতর|সম্ভাব্য|inaasahan|umabot|ஆம்பர்|சிவப்பு|கணிப்பு|ആംബർ|റെഡ്|പ്രവചനം|एम्बर|रातो|अनुमान/i;
+  /amber|red|threshold|cross|reach|projected|forecast|escalat|stop-work|البرتقالي|الأحمر|متوقع|تجاوز|अंबर|गंभीर|संभावित|امبر|متوقع|سنگین|সতর্ক|গুরুতর|সম্ভাব্য|inaasahan|umabot|ஆம்பர்|சிவப்பு|கணிப்பு|ആംബർ|റെഡ്|പ്രവചനം|एम्बर|रातो|अनुमान|ඇම්බර්|රතු|සීමාව|පුරෝකථනය/i;
 
 /**
  * SERVER-SIDE RESPONSIBLE AI GUARD:
- * Validates LLM-generated alert text across ALL 9 Dubai/UAE languages against deterministic ForecastOutput.
+ * Validates LLM-generated alert text across ALL 10 Dubai/UAE languages against deterministic ForecastOutput.
  * If Gemini fabricates a crossing minute ETA when ETAs are null/falling, or diverges >±2 min
  * from projectedAmberCrossingMin/projectedRedCrossingMin, the offending field is discarded
  * and replaced with the deterministic template built directly from structured engine fields.
@@ -681,7 +727,7 @@ async function explainAndTranslateWorkerAlert(
       : `Forecast status: insufficient trend data (${forecast.reason}). Do not invent a crossing time.`;
 
   const prompt = `You are SiteGuard's worker safety communicator for UAE (Dubai & Abu Dhabi) outdoor industrial crews.
-Generate a calm, clear, non-alarming alert in English (en), plus accurate natural everyday translations in Arabic (ar), Hindi (hi), Urdu (ur), Bengali (bn), Tagalog (tl), Tamil (ta), Malayalam (ml), and Nepali (ne). Keep numbers and units exact.
+Generate a calm, clear, non-alarming alert in English (en), plus accurate natural everyday translations in Arabic (ar), Hindi (hi), Urdu (ur), Bengali (bn), Tagalog (tl), Tamil (ta), Malayalam (ml), Nepali (ne), and Sinhala (si). Keep numbers and units exact.
 
 Worker context: Role=${context.roleLabel}, Zone=${context.zone}, PPE=${context.ppeLevel}, Acclimatization=${context.acclimatizationDays} days, Hydration count=${context.hydrationCount}, Planned break=${context.plannedBreakTime}.
 Current environment: Air ${env.airTempC}°C, Outdoor WBGT ${env.wbgtC}°C, UAE Midday Break active=${env.inUaeMiddayBreakWindow}.
@@ -696,7 +742,7 @@ STRICT SAFETY RULES FOR THRESHOLD ETAs (NEVER VIOLATE):
 3. When forecast.status is "insufficient_trend_data", never state any minute ETA.
 4. headline, explanation, and action must never state a crossing ETA that contradicts projectedAmberCrossingMin / projectedRedCrossingMin.
 
-For each language (en, ar, hi, ur, bn, tl, ta, ml, ne), provide:
+For each language (en, ar, hi, ur, bn, tl, ta, ml, ne, si), provide:
 - headline: max 6 words, uppercase clarity, calm safety directive
 - explanation: 1 short sentence explaining why in plain words (no jargon like "Moran PSI")
 - action: 1 concrete immediate action sentence
@@ -722,8 +768,9 @@ For each language (en, ar, hi, ur, bn, tl, ta, ml, ne), provide:
               ta: makeAlertCopySchema(),
               ml: makeAlertCopySchema(),
               ne: makeAlertCopySchema(),
+              si: makeAlertCopySchema(),
             },
-            required: ['en', 'ar', 'hi', 'ur', 'bn', 'tl', 'ta', 'ml', 'ne'],
+            required: ['en', 'ar', 'hi', 'ur', 'bn', 'tl', 'ta', 'ml', 'ne', 'si'],
           },
         },
       }),
@@ -1841,3 +1888,350 @@ Voice Command: "${params.commandText.slice(0, 240)}"`;
     return fallback;
   }
 }
+
+const globalAlertCache = new Map<string, WorkerAlertCopy>();
+
+export async function translateWorkerAlertGlobal(params: {
+  context: WorkerContext;
+  assessment: RiskAssessment;
+  forecast: ForecastOutput;
+  env: EnvironmentalObservation;
+  target: {
+    code: string;
+    name: string;
+    nativeName: string;
+  };
+  baseCopyOverride?: {
+    headline: string;
+    explanation: string;
+    action: string;
+    proactiveForecastNote?: string | null;
+  };
+}): Promise<WorkerAlertCopy> {
+  const { context, assessment, forecast, env, target, baseCopyOverride } = params;
+  const baseEn =
+    baseCopyOverride ??
+    buildDeterministicFallback(context, assessment, forecast).en;
+
+  if (target.code === 'en') {
+    return {
+      headline: baseEn.headline,
+      explanation: baseEn.explanation,
+      action: baseEn.action,
+      proactiveForecastNote: baseEn.proactiveForecastNote ?? null,
+      source: 'template_fallback',
+      cached: true,
+    };
+  }
+
+  const cacheKey = [
+    'global-v1',
+    buildCacheKey(assessment, forecast, context),
+    target.code,
+    baseEn.headline,
+  ].join('|');
+
+  const hit = globalAlertCache.get(cacheKey);
+  if (hit) {
+    return { ...hit, cached: true };
+  }
+
+  const fallbackCopy: WorkerAlertCopy = {
+    headline: `[${target.nativeName}] ${baseEn.headline}`,
+    explanation: baseEn.explanation,
+    action: baseEn.action,
+    proactiveForecastNote: baseEn.proactiveForecastNote ?? null,
+    source: 'template_fallback',
+    cached: false,
+  };
+
+  const ai = getClient();
+  if (!ai || Date.now() < dailyQuotaCooldownUntil || Date.now() < transientCooldownUntil) {
+    lastGeminiDiagnostic = !ai
+      ? 'no_api_key'
+      : Date.now() < dailyQuotaCooldownUntil
+        ? 'quota_exhausted'
+        : 'fallback';
+    return fallbackCopy;
+  }
+
+  try {
+    const prompt = `Translate this industrial heat-safety wearable guidance for a worker in Abu Dhabi / Dubai (UAE) into ${target.name} (${target.nativeName}, BCP-47 code "${target.code}") in clear, natural spoken phrasing appropriate for an industrial worker.
+Preserve exact numbers, temperatures, and minute values accurately. Do NOT invent any new minute ETAs.
+
+Source English Guidance:
+- Tier: ${assessment.tier} (Station: ${env.station}, WBGT ${env.wbgtC}°C)
+- headline: ${baseEn.headline}
+- explanation: ${baseEn.explanation}
+- action: ${baseEn.action}
+- proactiveForecastNote: ${baseEn.proactiveForecastNote ?? ''}
+
+Return JSON with keys: headline, explanation, action, proactiveForecastNote (return "" if input proactiveForecastNote is empty).`;
+
+    const res = await withRetry(() =>
+      withTimeout(
+        ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: prompt,
+          config: {
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+            responseMimeType: 'application/json',
+            responseSchema: makeAlertCopySchema(),
+          },
+        }),
+        12000
+      )
+    );
+
+    const parsed = JSON.parse((res.text ?? '{}').trim()) as {
+      headline?: string;
+      explanation?: string;
+      action?: string;
+      proactiveForecastNote?: string;
+    };
+
+    const result: WorkerAlertCopy = {
+      headline: parsed.headline?.trim() || baseEn.headline,
+      explanation: parsed.explanation?.trim() || baseEn.explanation,
+      action: parsed.action?.trim() || baseEn.action,
+      proactiveForecastNote: parsed.proactiveForecastNote?.trim()
+        ? parsed.proactiveForecastNote.trim()
+        : baseEn.proactiveForecastNote ?? null,
+      source: 'gemini',
+      cached: false,
+    };
+
+    globalAlertCache.set(cacheKey, result);
+    lastGeminiDiagnostic = 'ok';
+    return result;
+  } catch (err) {
+    if (isDailyQuotaError(err)) {
+      dailyQuotaCooldownUntil = Date.now() + 5 * 60_000;
+      lastGeminiDiagnostic = 'quota_exhausted';
+    } else {
+      lastGeminiDiagnostic = 'fallback';
+    }
+    return fallbackCopy;
+  }
+}
+
+export type WorkerTtsResult =
+  | {
+      ok: true;
+      audioBase64: string;
+      mimeType: string;
+      language: string;
+      localeTag: string;
+      voiceName: string;
+      model: 'gemini-3.8-flash-lite-tts';
+      cached: boolean;
+      source: 'gemini_tts';
+    }
+  | {
+      ok: false;
+      fallback: 'web_speech';
+      reason: 'no_api_key' | 'quota_exhausted' | 'tts_error';
+      error: string;
+    };
+
+/**
+ * Gemini 3.8 unary TTS defaults to complete WAV (`audio/wav` with 44-byte RIFF header, 24kHz mono 16-bit).
+ * Only wrap with a RIFF WAV header when raw PCM (`audio/pcm` / `audio/l16`) without a RIFF header is returned.
+ */
+export function ensurePlayableWavBuffer(
+  bytes: Buffer,
+  rawMimeType?: string
+): { buffer: Buffer; mimeType: string } {
+  const normalizedMime = (rawMimeType || 'audio/wav').split(';')[0].trim().toLowerCase();
+  const hasRiffHeader =
+    bytes.length >= 12 &&
+    bytes.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    bytes.subarray(8, 12).toString('ascii') === 'WAVE';
+
+  if (hasRiffHeader) {
+    return { buffer: bytes, mimeType: 'audio/wav' };
+  }
+
+  if (normalizedMime === 'audio/l16' || normalizedMime === 'audio/pcm') {
+    const sampleRate = 24000;
+    const channels = 1;
+    const bitsPerSample = 16;
+    const byteRate = (sampleRate * channels * bitsPerSample) / 8;
+    const blockAlign = (channels * bitsPerSample) / 8;
+    const header = Buffer.alloc(44);
+    header.write('RIFF', 0, 'ascii');
+    header.writeUInt32LE(36 + bytes.length, 4);
+    header.write('WAVE', 8, 'ascii');
+    header.write('fmt ', 12, 'ascii');
+    header.writeUInt32LE(16, 16); // PCM chunk size
+    header.writeUInt16LE(1, 20); // PCM format
+    header.writeUInt16LE(channels, 22);
+    header.writeUInt32LE(sampleRate, 24);
+    header.writeUInt32LE(byteRate, 28);
+    header.writeUInt16LE(blockAlign, 32);
+    header.writeUInt16LE(bitsPerSample, 34);
+    header.write('data', 36, 'ascii');
+    header.writeUInt32LE(bytes.length, 40);
+    return { buffer: Buffer.concat([header, bytes]), mimeType: 'audio/wav' };
+  }
+
+  return {
+    buffer: bytes,
+    mimeType: normalizedMime.startsWith('audio/') ? normalizedMime : 'audio/wav',
+  };
+}
+
+/**
+ * USE CASE 9: Server-Side Multilingual Worker Safety Cloud TTS (`gemini-3.8-flash-lite-tts`).
+ * Generates authentic native pronunciation across all 10 UAE crew languages & 114+ global languages
+ * without relying on OS-installed Web Speech SAPI voices.
+ */
+export async function synthesizeWorkerSpeech(params: {
+  text: string;
+  language: string;
+  localeTag?: string;
+  languageName?: string;
+  severity?: 'nominal' | 'amber' | 'red';
+}): Promise<WorkerTtsResult> {
+  const cleanText = params.text.trim().slice(0, 1200);
+  const language = params.language.trim() || 'en';
+  const localeTag = params.localeTag?.trim() || 'en-US';
+  const languageName = params.languageName?.trim() || language;
+  const severity = params.severity ?? 'amber';
+  const voiceName = severity === 'red' ? 'Fenrir' : 'Kore';
+
+  const cacheKey = `${language}|${localeTag}|${severity}|${cleanText}`;
+  const cached = ttsAudioCache.get(cacheKey);
+  if (cached) {
+    return {
+      ok: true,
+      audioBase64: cached.audioBase64,
+      mimeType: cached.mimeType,
+      language,
+      localeTag,
+      voiceName: cached.voiceName,
+      model: 'gemini-3.8-flash-lite-tts',
+      cached: true,
+      source: 'gemini_tts',
+    };
+  }
+
+  const ai = getClient();
+  if (!ai) {
+    lastGeminiDiagnostic = 'no_api_key';
+    return {
+      ok: false,
+      fallback: 'web_speech',
+      reason: 'no_api_key',
+      error: 'GEMINI_API_KEY is not configured on the server; use offline Web Speech fallback.',
+    };
+  }
+
+  if (Date.now() < dailyQuotaCooldownUntil) {
+    lastGeminiDiagnostic = 'quota_exhausted';
+    return {
+      ok: false,
+      fallback: 'web_speech',
+      reason: 'quota_exhausted',
+      error: 'Gemini API daily quota cooldown active; use offline Web Speech fallback.',
+    };
+  }
+
+  try {
+    const style =
+      severity === 'red'
+        ? `Urgent, crystal-clear industrial safety stop-work alert spoken natively in ${languageName} (${localeTag})`
+        : severity === 'amber'
+          ? `Calm, authoritative heat safety advisory spoken natively in ${languageName} (${localeTag})`
+          : `Friendly, clear hydration and safety guidance spoken natively in ${languageName} (${localeTag})`;
+
+    const response = await withRetry(() =>
+      withTimeout(
+        ai.models.generateContent({
+          model: 'gemini-3.8-flash-lite-tts',
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  text: cleanText,
+                  speechMetadata: { style },
+                },
+              ],
+            },
+          ],
+          config: {
+            responseModalities: ['AUDIO'],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName },
+              },
+            },
+          },
+        }),
+        20000
+      )
+    );
+
+    const part = response.candidates?.[0]?.content?.parts?.find((p) => Boolean(p.inlineData?.data));
+    const rawData = part?.inlineData?.data;
+    if (!rawData) {
+      lastGeminiDiagnostic = 'fallback';
+      return {
+        ok: false,
+        fallback: 'web_speech',
+        reason: 'tts_error',
+        error: 'Cloud TTS response did not include audio inlineData.',
+      };
+    }
+
+    const decoded = Buffer.from(rawData, 'base64');
+    const normalized = ensurePlayableWavBuffer(decoded, part?.inlineData?.mimeType);
+    const audioBase64 = normalized.buffer.toString('base64');
+
+    if (ttsAudioCache.size >= 80) {
+      const oldestKey = ttsAudioCache.keys().next().value;
+      if (oldestKey) ttsAudioCache.delete(oldestKey);
+    }
+    ttsAudioCache.set(cacheKey, {
+      audioBase64,
+      mimeType: normalized.mimeType,
+      voiceName,
+    });
+
+    lastGeminiDiagnostic = 'ok';
+    return {
+      ok: true,
+      audioBase64,
+      mimeType: normalized.mimeType,
+      language,
+      localeTag,
+      voiceName,
+      model: 'gemini-3.8-flash-lite-tts',
+      cached: false,
+      source: 'gemini_tts',
+    };
+  } catch (err) {
+    if (isDailyQuotaError(err)) {
+      dailyQuotaCooldownUntil = Date.now() + 5 * 60_000;
+      lastGeminiDiagnostic = 'quota_exhausted';
+      return {
+        ok: false,
+        fallback: 'web_speech',
+        reason: 'quota_exhausted',
+        error: 'Gemini TTS quota exhausted.',
+      };
+    }
+    lastGeminiDiagnostic = 'fallback';
+    const message = err instanceof Error ? err.message : String(err);
+    console.info(`[GeminiService] Cloud TTS fallback (${message})`);
+    return {
+      ok: false,
+      fallback: 'web_speech',
+      reason: 'tts_error',
+      error: message,
+    };
+  }
+}
+
+

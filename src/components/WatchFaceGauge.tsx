@@ -1,4 +1,5 @@
-import { Droplets, Flame, OctagonAlert } from 'lucide-react';
+import { Battery, BatteryCharging, BatteryWarning, Droplets, Flame, OctagonAlert } from 'lucide-react';
+import { useAbuDhabiClock } from '../hooks/useAbuDhabiClock';
 import { RISK_TIER_THRESHOLDS, mapScoreToTier } from '../shared/riskEngine';
 import { formatTemperature, type TemperatureUnit } from '../shared/temperature';
 import type { WorkerStateSelf } from '../shared/types';
@@ -57,6 +58,7 @@ export function WatchFaceGauge({
   tempUnit = 'C',
   edgeOfflineActive = false,
 }: WatchFaceGaugeProps) {
+  const clock = useAbuDhabiClock();
   const { context, assessment, forecast, faults, latestFrame, history, simulatedClockMin } = workerState;
   const thresholds = workerState.tierThresholds ?? RISK_TIER_THRESHOLDS;
   const maxScore = thresholds.maxScore || 10;
@@ -158,6 +160,64 @@ export function WatchFaceGauge({
     </div>
   );
 
+  const batteryPct = Math.max(0, Math.min(100, Math.round(latestFrame.batteryPct)));
+  const renderWatchTopComplications = (alertAccent: 'green' | 'amber' | 'red' | 'cyan' = 'green') => {
+    const timeAccent =
+      alertAccent === 'red'
+        ? 'text-rose-200 border-[#fa114f]/45 bg-[#fa114f]/15'
+        : alertAccent === 'amber'
+          ? 'text-amber-200 border-[#f59e0b]/45 bg-[#f59e0b]/15'
+          : alertAccent === 'cyan'
+            ? 'text-cyan-200 border-cyan-400/40 bg-cyan-500/12'
+            : 'text-slate-200 border-white/12 bg-[#141821]/90';
+
+    const batColor =
+      faults.lowBattery || batteryPct <= 15
+        ? 'text-[#ff6b93]'
+        : batteryPct <= 35
+          ? 'text-amber-300'
+          : 'text-emerald-300';
+
+    const BatIcon =
+      faults.lowBattery || batteryPct <= 15
+        ? BatteryWarning
+        : batteryPct >= 90
+          ? BatteryCharging
+          : Battery;
+
+    return (
+      <div className="w-full flex items-center justify-between gap-2 text-[10px] font-mono tabular-nums">
+        <div
+          data-testid="watch-abudhabi-clock"
+          className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg border ${timeAccent}`}
+          title={`Abu Dhabi GST (${clock.dateLabel}) · Shift T+${simulatedClockMin}m`}
+        >
+          <span
+            aria-hidden="true"
+            className={`w-1.5 h-1.5 rounded-full animate-pulse ${
+              isEdgePillActive ? 'bg-amber-400' : 'bg-emerald-400'
+            }`}
+          />
+          <span className="font-semibold">{clock.timeWithSeconds}</span>
+          <span className="text-[9px] opacity-75">GST · T+{simulatedClockMin}m</span>
+        </div>
+
+        <div
+          data-testid="watch-battery-complication"
+          className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg border border-white/12 bg-[#141821]/90 text-slate-200"
+          title={
+            isEdgePillActive
+              ? 'Edge Backup Telemetry Active'
+              : 'Synced to Live Abu Dhabi Telemetry'
+          }
+        >
+          <BatIcon className={`w-3 h-3 shrink-0 ${batColor}`} />
+          <span className={`font-semibold ${batColor}`}>{batteryPct}%</span>
+        </div>
+      </div>
+    );
+  };
+
   // Separate Always-On Display (AOD) low-power rendering branch:
   // Genuinely reduced-pixel SVG: monochrome grayscale only, thin 1.5px strokes,
   // zero outer history ticks, zero ghost needle, single-letter tier marker (G/A/R).
@@ -176,8 +236,8 @@ export function WatchFaceGauge({
         }`}
       >
         <div className="w-full flex items-center justify-between text-[11px] font-mono tabular-nums text-neutral-500 mb-2">
-          <span>AOD · LOW POWER</span>
-          <span>T+{simulatedClockMin}m</span>
+          <span>AOD · {clock.timeShort} GST</span>
+          <span>BAT {batteryPct}% · T+{simulatedClockMin}m</span>
         </div>
 
         <svg
@@ -300,10 +360,7 @@ export function WatchFaceGauge({
             : 'rounded-[28px] bg-[#0B1120] border-2 border-slate-800 px-6 py-5 shadow-lg'
         }`}
       >
-        <div className="w-full flex items-center justify-between text-[11px] font-mono tabular-nums text-slate-400">
-          <span>T+{simulatedClockMin}m</span>
-          <span>BAT {latestFrame.batteryPct}%</span>
-        </div>
+        {renderWatchTopComplications('cyan')}
         {renderEdgeStatusPill()}
 
         <div
@@ -403,10 +460,7 @@ export function WatchFaceGauge({
             : 'rounded-[28px] bg-[#0B1120] border-2 border-slate-800 px-6 py-5 shadow-lg'
         }`}
       >
-        <div className="w-full flex items-center justify-between text-[11px] font-mono tabular-nums text-slate-400">
-          <span>T+{simulatedClockMin}m</span>
-          <span>BAT {latestFrame.batteryPct}%</span>
-        </div>
+        {renderWatchTopComplications('red')}
         {renderEdgeStatusPill()}
 
         <div
@@ -527,10 +581,7 @@ export function WatchFaceGauge({
             : 'rounded-[28px] bg-[#0B1120] border-2 border-[#fa114f] px-6 py-5 shadow-lg'
         }`}
       >
-        <div className="w-full flex items-center justify-between text-[11px] font-mono tabular-nums text-rose-200">
-          <span>T+{simulatedClockMin}m</span>
-          <span>BAT {latestFrame.batteryPct}%</span>
-        </div>
+        {renderWatchTopComplications('red')}
         {renderEdgeStatusPill()}
 
         <div
@@ -591,13 +642,14 @@ export function WatchFaceGauge({
           : 'rounded-[28px] bg-[#0B1120] border-2 border-slate-800 px-6 py-5 shadow-lg'
       }`}
     >
-      {/* Top Micro-Overlays: Simulated Clock Time (secondary) & Battery % */}
-      <div className="w-full flex items-center justify-between text-[11px] font-mono tabular-nums text-slate-400">
-        <span>T+{simulatedClockMin}m</span>
-        <span className={faults.lowBattery ? 'text-amber-300 font-semibold' : ''}>
-          BAT {latestFrame.batteryPct}%
-        </span>
-      </div>
+      {/* Top Micro-Overlays: Live Abu Dhabi GST Time, Elapsed Shift & Dynamic Battery */}
+      {renderWatchTopComplications(
+        isAmberForecastPreview || assessment.tier === 'Amber'
+          ? 'amber'
+          : assessment.tier === 'Red'
+            ? 'red'
+            : 'green'
+      )}
       {renderEdgeStatusPill()}
 
       {/* Circular 240° Watch Dial */}
@@ -608,6 +660,35 @@ export function WatchFaceGauge({
           role="img"
           aria-label={`Wearable strain gauge: ${mainScore.toFixed(1)} out of 10, ${activeTierWord}`}
         >
+          {/* Live 60-second Abu Dhabi Bezel Track & Orbiting Sync Dot */}
+          <circle
+            cx={CX}
+            cy={CY}
+            r={149}
+            fill="none"
+            stroke="#1e293b"
+            strokeOpacity={0.55}
+            strokeWidth={1}
+            strokeDasharray="2 6"
+          />
+          {(() => {
+            const secPt = polarToCartesian(CX, CY, 149, clock.seconds * 6);
+            return (
+              <circle
+                cx={secPt.x}
+                cy={secPt.y}
+                r={3.2}
+                fill={
+                  assessment.tier === 'Red'
+                    ? '#fa114f'
+                    : assessment.tier === 'Amber'
+                      ? '#f59e0b'
+                      : '#787aff'
+                }
+              />
+            );
+          })()}
+
           {/* Dim background track */}
           <path
             d={describeArc(CX, CY, ARC_RADIUS, greenStartDeg, redEndDeg)}

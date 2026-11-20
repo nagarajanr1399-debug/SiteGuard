@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom';
+import { useAbuDhabiClock } from '../hooks/useAbuDhabiClock';
 import { formatTemperature, type TemperatureUnit } from '../shared/temperature';
 import type { EnvironmentalObservation } from '../shared/types';
 import { AnimatedMetric } from './PageTransition';
@@ -24,6 +25,7 @@ export function TopNav({
   tempUnit,
   onToggleTempUnit,
 }: TopNavProps) {
+  const clock = useAbuDhabiClock();
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `whitespace-nowrap shrink-0 py-1.5 text-sm font-medium transition-all border-b-2 ${
       isActive
@@ -131,6 +133,14 @@ export function TopNav({
 
           {env && (
             <div className="flex flex-wrap items-center gap-3 font-mono tabular-nums text-slate-300">
+              <span
+                data-testid="topnav-abudhabi-clock"
+                title={clock.middayWindowStatusLabel}
+                className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border border-white/10 bg-[#0c111d] text-[11px] text-emerald-300"
+              >
+                <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span>AUH {clock.timeWithSeconds} GST</span>
+              </span>
               <span>
                 Air {formatTemperature(env.airTempC, tempUnit, 1)} · RH {env.relHumidityPct}% · WBGT{' '}
                 <strong className="text-white">

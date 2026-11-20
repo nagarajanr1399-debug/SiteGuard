@@ -70,7 +70,7 @@ test.describe('Wearable Safety Alerts & Sensor Telemetry Specifications', () => 
     await expect(page.getByText('36.0°C').first()).toBeVisible();
     await page.screenshot({ path: path.join(STATES_GALLERY, 'state-4-sos-active.png'), fullPage: true });
 
-    // 9-language Dubai/UAE switcher works cleanly inside alert spec states (Arabic RTL, Urdu RTL, Tamil, Malayalam, Nepali)
+    // 10-language Dubai/UAE switcher works cleanly inside alert spec states (Arabic RTL, Urdu RTL, Tamil, Malayalam, Nepali, Sinhala)
     const arResp = page.waitForResponse(
       (r) => r.url().includes('/api/worker/W-101/language') && r.request().method() === 'POST'
     );
@@ -98,6 +98,13 @@ test.describe('Wearable Safety Alerts & Sensor Telemetry Specifications', () => 
     await page.getByRole('button', { name: 'नेपाली' }).click();
     await neResp;
     await expect(page.locator('main')).toContainText(/[\u0900-\u097F]{3,}/);
+
+    const siResp = page.waitForResponse(
+      (r) => r.url().includes('/api/worker/W-101/language') && r.request().method() === 'POST'
+    );
+    await page.getByRole('button', { name: 'සිංහල' }).click();
+    await siResp;
+    await expect(page.locator('main')).toContainText(/[\u0D80-\u0DFF]{3,}/);
 
     const urResp = page.waitForResponse(
       (r) => r.url().includes('/api/worker/W-101/language') && r.request().method() === 'POST'

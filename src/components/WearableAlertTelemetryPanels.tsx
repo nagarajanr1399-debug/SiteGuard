@@ -10,7 +10,9 @@ import {
   TrendingUp,
   WifiOff,
 } from 'lucide-react';
+import type { GlobalLanguageOverride } from '../hooks/useWorkerVoiceAlerts';
 import { SG_SURFACES } from '../shared/designTokens';
+import type { GlobalLanguageOption } from '../shared/globalLanguages';
 import { formatTemperature, type TemperatureUnit } from '../shared/temperature';
 import { isRtlLanguage, LANGUAGE_LABELS, type SupportedLanguage } from '../shared/types';
 import {
@@ -20,6 +22,7 @@ import {
   getWearableAlertSpecCopy,
   type WearableAlertStateId,
 } from '../shared/wearableAlertSpecs';
+import { GlobalLanguagePicker } from './GlobalLanguagePicker';
 import { AnimatedMetric } from './PageTransition';
 
 interface AlertStateSwitcherProps {
@@ -202,6 +205,10 @@ interface WearableAlertSpecColumnProps {
   alertState: Exclude<WearableAlertStateId, 'live'>;
   language: SupportedLanguage;
   onChangeLanguage: (lang: SupportedLanguage) => void;
+  globalLanguageOverride?: GlobalLanguageOverride | null;
+  translatingGlobal?: boolean;
+  onSelectGlobalLanguage?: (lang: GlobalLanguageOption) => void;
+  onClearGlobalLanguage?: () => void;
   tempUnit: TemperatureUnit;
   updating: boolean;
   onBackToLive: () => void;
@@ -214,6 +221,10 @@ export function WearableAlertSpecColumn({
   alertState,
   language,
   onChangeLanguage,
+  globalLanguageOverride = null,
+  translatingGlobal = false,
+  onSelectGlobalLanguage,
+  onClearGlobalLanguage,
   tempUnit,
   updating,
   onBackToLive,
@@ -223,7 +234,12 @@ export function WearableAlertSpecColumn({
 }: WearableAlertSpecColumnProps) {
   const [escalationPulseCount, setEscalationPulseCount] = useState(0);
   const copy = getWearableAlertSpecCopy(alertState, language, tempUnit);
-  const isRtl = isRtlLanguage(language);
+  const activeHeadline = globalLanguageOverride?.copy.headline ?? copy.headline;
+  const activeAction = globalLanguageOverride?.copy.action ?? copy.action;
+  const activeSecondary = globalLanguageOverride?.copy.explanation ?? copy.secondaryDetail;
+  const activeLanguageLabel =
+    globalLanguageOverride?.option.nativeName ?? LANGUAGE_LABELS[language].native;
+  const isRtl = globalLanguageOverride?.option.rtl ?? isRtlLanguage(language);
 
   const cardRingClass =
     alertState === 'sos_active'
@@ -274,7 +290,7 @@ export function WearableAlertSpecColumn({
         <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-white/10">
           <div className="flex flex-wrap items-center gap-2.5">
             <span className="text-xs font-mono uppercase tracking-wider text-slate-400">
-              Wearable Safety Guidance ({LANGUAGE_LABELS[language].native})
+              Wearable Safety Guidance ({activeLanguageLabel})
             </span>
             <span className="px-2.5 py-0.5 rounded-lg border border-[#f59e0b]/45 bg-[#f59e0b]/15 text-[11px] font-mono text-amber-200 inline-flex items-center gap-1.5">
               <WifiOff className="w-3 h-3 shrink-0" />
@@ -290,7 +306,7 @@ export function WearableAlertSpecColumn({
                 disabled={updating}
                 onClick={() => onChangeLanguage(code)}
                 className={`px-2.5 py-1.5 text-xs font-medium rounded-lg transition-all active:scale-[0.99] cursor-pointer whitespace-nowrap ${
-                  language === code
+                  !globalLanguageOverride && language === code
                     ? 'bg-[#787aff] text-white shadow-xs'
                     : 'text-slate-300 hover:text-white'
                 }`}
@@ -301,10 +317,21 @@ export function WearableAlertSpecColumn({
           </div>
         </div>
 
+        {onSelectGlobalLanguage && (
+          <div className="mt-3">
+            <GlobalLanguagePicker
+              activeGlobalLang={globalLanguageOverride?.option ?? null}
+              translating={translatingGlobal}
+              onSelectGlobalLanguage={onSelectGlobalLanguage}
+              onClearGlobalLanguage={onClearGlobalLanguage}
+            />
+          </div>
+        )}
+
         <div className="mt-4" dir={isRtl ? 'rtl' : 'ltr'}>
-          <div className="text-lg font-bold text-white leading-snug">{copy.headline}</div>
-          <p className="text-sm text-slate-200 mt-1.5 leading-relaxed">{copy.action}</p>
-          <p className="text-xs text-slate-400 mt-2">{copy.secondaryDetail}</p>
+          <div className="text-lg font-bold text-white leading-snug">{activeHeadline}</div>
+          <p className="text-sm text-slate-200 mt-1.5 leading-relaxed">{activeAction}</p>
+          <p className="text-xs text-slate-400 mt-2">{activeSecondary}</p>
         </div>
 
         {/* STATE 1: AMBER FORECAST TELEMETRY */}

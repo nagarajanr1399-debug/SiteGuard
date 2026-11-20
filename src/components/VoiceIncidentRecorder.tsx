@@ -54,6 +54,7 @@ const SPEECH_LOCALE_MAP: Record<SupportedLanguage, string> = {
   ta: 'ta-IN',
   ml: 'ml-IN',
   ne: 'ne-NP',
+  si: 'si-LK',
 };
 
 function blobToBase64(blob: Blob): Promise<string> {

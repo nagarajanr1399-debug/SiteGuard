@@ -20,7 +20,7 @@ export interface GlobalLanguageOption {
  * industrial, construction, maritime, and infrastructure teams.
  */
 export const GLOBAL_WORKFORCE_LANGUAGES: GlobalLanguageOption[] = [
-  // Core 9 UAE Quick-Switch Languages
+  // Core 10 UAE Quick-Switch Languages
   { code: 'en', name: 'English', nativeName: 'English', region: 'Core UAE', bcp47: 'en-US' },
   { code: 'ar', name: 'Arabic', nativeName: 'العربية', region: 'Core UAE', bcp47: 'ar-AE', rtl: true },
   { code: 'hi', name: 'Hindi', nativeName: 'हिन्दी', region: 'Core UAE', bcp47: 'hi-IN' },
@@ -30,6 +30,7 @@ export const GLOBAL_WORKFORCE_LANGUAGES: GlobalLanguageOption[] = [
   { code: 'ta', name: 'Tamil', nativeName: 'தமிழ்', region: 'Core UAE', bcp47: 'ta-IN' },
   { code: 'ml', name: 'Malayalam', nativeName: 'മലയാളം', region: 'Core UAE', bcp47: 'ml-IN' },
   { code: 'ne', name: 'Nepali', nativeName: 'नेपाली', region: 'Core UAE', bcp47: 'ne-NP' },
+  { code: 'si', name: 'Sinhala', nativeName: 'සිංහල', region: 'Core UAE', bcp47: 'si-LK' },
 
   // South Asia
   { code: 'te', name: 'Telugu', nativeName: 'తెలుగు', region: 'South Asia', bcp47: 'te-IN' },
@@ -38,7 +39,6 @@ export const GLOBAL_WORKFORCE_LANGUAGES: GlobalLanguageOption[] = [
   { code: 'gu', name: 'Gujarati', nativeName: 'ગુજરાતી', region: 'South Asia', bcp47: 'gu-IN' },
   { code: 'kn', name: 'Kannada', nativeName: 'ಕನ್ನಡ', region: 'South Asia', bcp47: 'kn-IN' },
   { code: 'or', name: 'Odia', nativeName: 'ଓଡ଼ିଆ', region: 'South Asia', bcp47: 'or-IN' },
-  { code: 'si', name: 'Sinhala', nativeName: 'සිංහල', region: 'South Asia', bcp47: 'si-LK' },
   { code: 'as', name: 'Assamese', nativeName: 'অসমীয়া', region: 'South Asia', bcp47: 'as-IN' },
   { code: 'sd', name: 'Sindhi', nativeName: 'سنڌي', region: 'South Asia', bcp47: 'sd-PK', rtl: true },
   { code: 'bho', name: 'Bhojpuri', nativeName: 'भोजपुरी', region: 'South Asia', bcp47: 'hi-IN' },

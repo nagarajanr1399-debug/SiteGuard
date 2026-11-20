@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Activity, RefreshCw, Sliders, Sparkles, Volume2, VolumeX } from 'lucide-react';
 import { AnimatedMetric } from '../components/PageTransition';
 import { VoiceCopilotBar, VoiceWaveform, useVoiceSpeechOutput } from '../components/VoiceCopilotBar';
+import { useAbuDhabiClock } from '../hooks/useAbuDhabiClock';
 import { SG_SURFACES } from '../shared/designTokens';
 import type { BacktestReport, ValidationAiInsights } from '../shared/types';
 
@@ -25,6 +26,7 @@ export function ValidationPage() {
     'ALL' | 'True Positive' | 'False Positive' | 'False Negative' | 'True Negative'
   >('ALL');
   const { speaking, speak, stopSpeaking } = useVoiceSpeechOutput();
+  const clock = useAbuDhabiClock();
 
   const loadBacktest = useCallback(async () => {
     try {
@@ -125,8 +127,10 @@ export function ValidationPage() {
       {/* Header */}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <div className="text-[11px] font-mono text-[#a5a7ff] uppercase tracking-wider">
-            Empirical Clinical Replay Telemetry · UAE Heatwave Benchmark
+          <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono text-[#a5a7ff] uppercase tracking-wider">
+            <span>Empirical Clinical Replay Telemetry · UAE Heatwave Benchmark</span>
+            <span className="text-slate-600">·</span>
+            <span className="text-emerald-300">AUH {clock.timeWithSeconds} GST · Watch-Synced</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white mt-0.5">
             Historical Heat-Wave Backtest Validation

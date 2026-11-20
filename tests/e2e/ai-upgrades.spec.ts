@@ -36,7 +36,7 @@ test.describe('Hybrid AI Co-Pilots Across Supervisor, Compliance, Backtest & For
     expect(res.ok()).toBeTruthy();
   });
 
-  test('/supervisor AI Shift Triage Briefing generates 9-language briefings with zero raw vital leaks', async ({
+  test('/supervisor AI Shift Triage Briefing generates 10-language briefings with zero raw vital leaks', async ({
     page,
   }) => {
     const apiPayloads: Array<{ url: string; leaks: string[] }> = [];
@@ -54,7 +54,7 @@ test.describe('Hybrid AI Co-Pilots Across Supervisor, Compliance, Backtest & For
     await expect(panel).toBeVisible();
 
     const langSelect = page.getByLabel('Supervisor AI briefing language');
-    await expect(langSelect.locator('option')).toHaveCount(9);
+    await expect(langSelect.locator('option')).toHaveCount(10);
 
     const enReq = page.waitForResponse(
       (r) => r.url().includes('/api/supervisor/ai-briefing') && r.request().method() === 'POST'

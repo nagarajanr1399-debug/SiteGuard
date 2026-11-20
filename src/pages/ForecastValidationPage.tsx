@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Pause, Play, RotateCcw, Sparkles, Volume2, VolumeX } from 'lucide-react';
 import { AnimatedMetric } from '../components/PageTransition';
 import { VoiceCopilotBar, VoiceWaveform, useVoiceSpeechOutput } from '../components/VoiceCopilotBar';
+import { useAbuDhabiClock } from '../hooks/useAbuDhabiClock';
 import { SG_COLORS, SG_SURFACES } from '../shared/designTokens';
 import type {
   ForecastReplaySample,
@@ -27,6 +28,7 @@ export function ForecastValidationPage() {
   const [replayIndex, setReplayIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const { speaking, speak, stopSpeaking } = useVoiceSpeechOutput();
+  const clock = useAbuDhabiClock();
 
   const loadValidation = useCallback(async () => {
     try {
@@ -159,7 +161,8 @@ export function ForecastValidationPage() {
         <p className="text-xs sm:text-sm text-slate-400 mt-0.5">
           Walk-forward evaluation across{' '}
           <span className="font-mono tabular-nums text-slate-200">{report.samplesEvaluated15}</span> (t+15m) and{' '}
-          <span className="font-mono tabular-nums text-slate-200">{report.samplesEvaluated30}</span> (t+30m) held-out predictions. Zero LLM calls used for numeric extrapolation.
+          <span className="font-mono tabular-nums text-slate-200">{report.samplesEvaluated30}</span> (t+30m) held-out predictions. Zero LLM calls used for numeric extrapolation.{' '}
+          <span className="font-mono text-emerald-300">· AUH {clock.timeWithSeconds} GST · Watch Horizon Synced</span>
         </p>
       </div>
 

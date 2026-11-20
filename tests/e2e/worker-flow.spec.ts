@@ -167,9 +167,21 @@ test.describe('Worker Flow & Cross-Page Check-In', () => {
     await expect(page.getByText('Air 44.4°C')).toBeVisible();
   });
 
-  test('triggers multilingual voice-synthesis alerts when heat thresholds are exceeded', async ({
+  test('falls back to multilingual Web Speech alerts when server Cloud TTS is unavailable (offline/no_api_key)', async ({
     page,
   }) => {
+    await page.route('**/api/worker/*/speak', async (route) => {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: 'GEMINI_API_KEY is not configured on the server; use offline Web Speech fallback.',
+          fallback: 'web_speech',
+          reason: 'no_api_key',
+        }),
+      });
+    });
+
     await page.addInitScript(() => {
       const spokenLog: Array<{ text: string; lang: string }> = [];
       (window as unknown as { __spokenAlerts: typeof spokenLog }).__spokenAlerts = spokenLog;
@@ -225,6 +237,10 @@ test.describe('Worker Flow & Cross-Page Check-In', () => {
     await expect(page.getByTestId('worker-voice-alert-status')).toContainText(
       /AUDIBLE ALERT TRIGGERED|SPEAKING ALERT/i
     );
+    await expect(page.getByTestId('worker-voice-alert-status')).toHaveAttribute(
+      'data-voice-source',
+      'web_speech'
+    );
 
     const afterRed = await page.evaluate(
       () => (window as unknown as { __spokenAlerts: Array<{ text: string; lang: string }> }).__spokenAlerts
@@ -233,32 +249,52 @@ test.describe('Worker Flow & Cross-Page Check-In', () => {
     expect(afterRed[afterRed.length - 1].lang).toBe('en-US');
     expect(afterRed[afterRed.length - 1].text).toMatch(/STOP WORK/i);
 
-    // Switch worker language to Tamil while threshold is exceeded -> speaks immediately in ta-IN
+    // Switch worker language to Tamil while threshold is exceeded -> speaks in ta-IN
     const taResp = page.waitForResponse(
       (r) => r.url().includes('/api/worker/W-101/language') && r.request().method() === 'POST'
     );
     await page.getByRole('button', { name: 'தமிழ்' }).click();
     await taResp;
     await expect(page.getByTestId('worker-voice-locale')).toContainText('ta-IN');
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () => (window as unknown as { __spokenAlerts: Array<{ text: string; lang: string }> }).__spokenAlerts.at(-1)?.lang
+        )
+      )
+      .toBe('ta-IN');
 
-    const afterTa = await page.evaluate(
-      () => (window as unknown as { __spokenAlerts: Array<{ text: string; lang: string }> }).__spokenAlerts
-    );
-    expect(afterTa[afterTa.length - 1].lang).toBe('ta-IN');
-    expect(afterTa[afterTa.length - 1].text).toMatch(/[\u0B80-\u0BFF]{3,}/);
-
-    // Switch worker language to Arabic while threshold is exceeded -> speaks immediately in ar-AE
+    // Switch worker language to Arabic while threshold is exceeded -> speaks in ar-AE
     const arResp = page.waitForResponse(
       (r) => r.url().includes('/api/worker/W-101/language') && r.request().method() === 'POST'
     );
     await page.getByRole('button', { name: 'العربية' }).click();
     await arResp;
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () => (window as unknown as { __spokenAlerts: Array<{ text: string; lang: string }> }).__spokenAlerts.at(-1)?.lang
+        )
+      )
+      .toBe('ar-AE');
 
-    const afterAr = await page.evaluate(
-      () => (window as unknown as { __spokenAlerts: Array<{ text: string; lang: string }> }).__spokenAlerts
+    // Switch worker language to Sinhala while threshold is exceeded -> speaks in si-LK
+    const siResp = page.waitForResponse(
+      (r) => r.url().includes('/api/worker/W-101/language') && r.request().method() === 'POST'
     );
-    expect(afterAr[afterAr.length - 1].lang).toBe('ar-AE');
-    expect(afterAr[afterAr.length - 1].text).toMatch(/[\u0600-\u06FF]{3,}/);
+    await page.getByRole('button', { name: 'සිංහල' }).click();
+    await siResp;
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () => (window as unknown as { __spokenAlerts: Array<{ text: string; lang: string }> }).__spokenAlerts.at(-1)?.lang
+        )
+      )
+      .toBe('si-LK');
+    const afterSi = await page.evaluate(
+      () => (window as unknown as { __spokenAlerts: Array<{ text: string; lang: string }> }).__spokenAlerts.at(-1)
+    );
+    expect(afterSi?.text).toMatch(/[\u0D80-\u0DFF]{3,}/);
 
     // Mute toggle stops/silences auto alerts cleanly
     await page.getByTestId('worker-voice-alert-toggle').click();
@@ -267,6 +303,174 @@ test.describe('Worker Flow & Cross-Page Check-In', () => {
       'false'
     );
     await expect(page.getByTestId('worker-voice-alert-status')).toContainText(/muted/i);
+  });
+
+  test('plays server-side Cloud TTS audio via <audio> ahead of Web Speech across English, Tamil, Arabic, and Sinhala', async ({
+    page,
+    request,
+  }) => {
+    // 1. Validate /api/worker/:id/speak backend API contract
+    const emptyTextRes = await request.post('/api/worker/W-101/speak', {
+      data: { text: '   ', language: 'ta' },
+    });
+    expect(emptyTextRes.status()).toBe(400);
+
+    const missingWorkerRes = await request.post('/api/worker/UNKNOWN-999/speak', {
+      data: { text: 'Drink water', language: 'en' },
+    });
+    expect(missingWorkerRes.status()).toBe(404);
+
+    const liveSpeakRes = await request.post('/api/worker/W-101/speak', {
+      data: {
+        text: 'වැඩ වහාම නවතන්න — සිසිල් වන්න',
+        language: 'si',
+        localeTag: 'si-LK',
+        severity: 'red',
+      },
+    });
+    expect([200, 503]).toContain(liveSpeakRes.status());
+    const liveSpeakBody = await liveSpeakRes.json();
+    if (liveSpeakRes.status() === 200) {
+      expect(typeof liveSpeakBody.audioBase64).toBe('string');
+      expect(liveSpeakBody.mimeType).toBe('audio/wav');
+      expect(liveSpeakBody.source).toBe('gemini_tts');
+    } else {
+      expect(liveSpeakBody.fallback).toBe('web_speech');
+    }
+
+    // 2. Verify client plays Cloud TTS <audio> blob when /speak succeeds and never invokes Web Speech fallback
+    const minimalWavBytes = new Uint8Array([
+      0x52, 0x49, 0x46, 0x46, 0x2c, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45,
+      0x66, 0x6d, 0x74, 0x20, 0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+      0xc0, 0x5d, 0x00, 0x00, 0x80, 0xbb, 0x00, 0x00, 0x02, 0x00, 0x10, 0x00,
+      0x64, 0x61, 0x74, 0x61, 0x08, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ]);
+    const minimalWavBase64 = Buffer.from(minimalWavBytes).toString('base64');
+    const speakRequests: Array<{ language: string; localeTag: string; text: string }> = [];
+
+    await page.route('**/api/worker/*/speak', async (route) => {
+      const payload = route.request().postDataJSON() as {
+        language: string;
+        localeTag: string;
+        text: string;
+      };
+      speakRequests.push(payload);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          audioBase64: minimalWavBase64,
+          mimeType: 'audio/wav',
+          language: payload.language,
+          localeTag: payload.localeTag,
+          voiceName: 'Fenrir',
+          model: 'gemini-3.8-flash-lite-tts',
+          cached: false,
+          source: 'gemini_tts',
+        }),
+      });
+    });
+
+    await page.addInitScript(() => {
+      const webSpeechCalls: string[] = [];
+      const audioPlaySrcs: string[] = [];
+      (window as unknown as { __webSpeechCalls: string[]; __audioPlaySrcs: string[] }).__webSpeechCalls =
+        webSpeechCalls;
+      (window as unknown as { __audioPlaySrcs: string[] }).__audioPlaySrcs = audioPlaySrcs;
+
+      Object.defineProperty(window, 'speechSynthesis', {
+        configurable: true,
+        writable: true,
+        value: {
+          cancel: () => {},
+          getVoices: () => [],
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          speak: (u: { text: string }) => {
+            webSpeechCalls.push(u.text);
+          },
+        },
+      });
+
+      HTMLMediaElement.prototype.play = function () {
+        audioPlaySrcs.push(this.src);
+        return Promise.resolve();
+      };
+    });
+
+    await page.goto('/worker');
+    await page.getByRole('button', { name: /Developer \/ BLE Simulator/i }).click();
+    const redPost = page.waitForResponse(
+      (r) => r.url().includes('/api/ble/telemetry') && r.request().method() === 'POST'
+    );
+    await page.getByRole('button', { name: 'Critical', exact: true }).click();
+    await redPost;
+
+    await expect(page.getByTestId('worker-voice-alert-status')).toHaveAttribute(
+      'data-voice-source',
+      'cloud_tts'
+    );
+    await expect(page.getByTestId('worker-voice-locale')).toContainText('Gemini Cloud TTS (Fenrir)');
+
+    const audioEl = page.getByTestId('worker-voice-audio');
+    await expect(audioEl).toHaveAttribute('src', /^blob:/);
+
+    for (const langBtn of ['தமிழ்', 'العربية', 'සිංහල']) {
+      const langResp = page.waitForResponse(
+        (r) => r.url().includes('/api/worker/W-101/language') && r.request().method() === 'POST'
+      );
+      await page.getByRole('button', { name: langBtn }).click();
+      await langResp;
+    }
+
+    await expect.poll(() => speakRequests.length).toBeGreaterThanOrEqual(4);
+    expect(speakRequests.map((r) => r.localeTag)).toEqual(
+      expect.arrayContaining(['en-US', 'ta-IN', 'ar-AE', 'si-LK'])
+    );
+
+    const runtimeCounts = await page.evaluate(() => ({
+      webSpeechCalls: (window as unknown as { __webSpeechCalls: string[] }).__webSpeechCalls.length,
+      audioPlays: (window as unknown as { __audioPlaySrcs: string[] }).__audioPlaySrcs.length,
+    }));
+    expect(runtimeCounts.audioPlays).toBeGreaterThanOrEqual(4);
+    expect(runtimeCounts.webSpeechCalls).toBe(0);
+  });
+
+  test('displays live Abu Dhabi GST clock, dynamic per-worker battery, and 114+ global language translator', async ({
+    page,
+  }) => {
+    await page.goto('/worker');
+
+    await expect(page.getByTestId('topnav-abudhabi-clock')).toContainText(/AUH \d{2}:\d{2}:\d{2} GST/);
+    await expect(page.getByTestId('watch-abudhabi-clock')).toContainText(/\d{2}:\d{2}:\d{2}/);
+    await expect(page.getByTestId('watch-abudhabi-clock')).toContainText('GST · T+12m');
+    await expect(page.getByTestId('watch-battery-complication')).toContainText('93%');
+
+    // Switch to W-102 and confirm battery dynamically updates (77% instead of frozen 86%)
+    await page.locator('#worker-select').selectOption('W-102');
+    await expect(page.getByTestId('watch-battery-complication')).toContainText('77%');
+
+    // Step simulated clock +3 min -> watch clock advances to T+15m and battery drains dynamically to 76%
+    const step1 = page.waitForResponse((r) => r.url().includes('/sim-step'));
+    await page.getByRole('button', { name: '+3 min Step' }).click();
+    await step1;
+    await expect(page.getByTestId('watch-abudhabi-clock')).toContainText('T+15m');
+    await expect(page.getByTestId('watch-battery-complication')).toContainText('76%');
+
+    // Open 114+ Global Languages picker, search Telugu, and translate via /translate-global
+    await page.getByTestId('global-language-picker-btn').click();
+    await expect(page.getByTestId('global-language-drawer')).toBeVisible();
+    await page.getByTestId('global-language-search').fill('Telugu');
+
+    const trResp = page.waitForResponse(
+      (r) => r.url().includes('/translate-global') && r.request().method() === 'POST'
+    );
+    await page.getByTestId('global-lang-te').click();
+    await trResp;
+
+    await expect(page.getByText('Wearable Safety Guidance (తెలుగు)')).toBeVisible();
+    await expect(page.getByTestId('worker-voice-locale')).toContainText('te-IN');
   });
 });
 

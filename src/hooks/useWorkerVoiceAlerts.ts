@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { GlobalLanguageOption } from '../shared/globalLanguages';
 import type { TemperatureUnit } from '../shared/temperature';
 import {
+  LANGUAGE_LABELS,
   TTS_LOCALE_BY_LANGUAGE,
   type SupportedLanguage,
+  type WorkerAlertCopy,
   type WorkerStateSelf,
 } from '../shared/types';
 import {
@@ -11,6 +14,11 @@ import {
 } from '../shared/wearableAlertSpecs';
 
 const STORAGE_KEY_ENABLED = 'siteguard_worker_voice_alerts_enabled';
+
+export interface GlobalLanguageOverride {
+  option: GlobalLanguageOption;
+  copy: WorkerAlertCopy;
+}
 
 export interface HeatThresholdVoiceEvaluation {
   exceeded: boolean;
@@ -21,6 +29,9 @@ export interface HeatThresholdVoiceEvaluation {
   spokenText: string;
   localeTag: string;
   language: SupportedLanguage;
+  speechLanguageCode: string;
+  languageName: string;
+  languageLabel: string;
   signature: string;
 }
 
@@ -30,6 +41,8 @@ export interface SpokenAlertRecord {
   localeTag: string;
   severity: 'nominal' | 'amber' | 'red';
   autoTriggered: boolean;
+  source: 'cloud_tts' | 'web_speech';
+  voiceName?: string;
   timestampIso: string;
 }
 
@@ -37,8 +50,9 @@ export function evaluateHeatThresholdForVoice(params: {
   workerState: WorkerStateSelf | null;
   alertPreviewState: WearableAlertStateId;
   tempUnit: TemperatureUnit;
+  globalLanguageOverride?: GlobalLanguageOverride | null;
 }): HeatThresholdVoiceEvaluation {
-  const { workerState, alertPreviewState, tempUnit } = params;
+  const { workerState, alertPreviewState, tempUnit, globalLanguageOverride } = params;
   if (!workerState) {
     return {
       exceeded: false,
@@ -49,15 +63,28 @@ export function evaluateHeatThresholdForVoice(params: {
       spokenText: '',
       localeTag: 'en-US',
       language: 'en',
+      speechLanguageCode: 'en',
+      languageName: 'English',
+      languageLabel: 'English',
       signature: 'none',
     };
   }
 
   const language = workerState.context.preferredLanguage;
-  const localeTag = TTS_LOCALE_BY_LANGUAGE[language] ?? 'en-US';
+  const activeLocaleTag =
+    globalLanguageOverride?.option.bcp47 ??
+    TTS_LOCALE_BY_LANGUAGE[language] ??
+    'en-US';
+  const activeLangCode = globalLanguageOverride?.option.code ?? language;
+  const activeLangName =
+    globalLanguageOverride?.option.name ?? LANGUAGE_LABELS[language]?.name ?? 'English';
+  const activeLangLabel =
+    globalLanguageOverride?.option.nativeName ?? LANGUAGE_LABELS[language]?.native ?? language;
 
   if (alertPreviewState !== 'live') {
     const specCopy = getWearableAlertSpecCopy(alertPreviewState, language, tempUnit);
+    const activeHeadline = globalLanguageOverride?.copy.headline ?? specCopy.headline;
+    const activeAction = globalLanguageOverride?.copy.action ?? specCopy.action;
     const exceeded = alertPreviewState !== 'hydration_alert';
     const severity: 'nominal' | 'amber' | 'red' =
       alertPreviewState === 'hydration_alert'
@@ -74,21 +101,27 @@ export function evaluateHeatThresholdForVoice(params: {
             ? 'SOS Distress sensor active'
             : 'Hydration reminder active (Nominal)';
 
-    const spokenText = `${specCopy.headline}. ${specCopy.action}`;
+    const spokenText = `${activeHeadline}. ${activeAction}`;
     return {
       exceeded,
       severity,
       reason,
-      headline: specCopy.headline,
-      actionText: specCopy.action,
+      headline: activeHeadline,
+      actionText: activeAction,
       spokenText,
-      localeTag,
+      localeTag: activeLocaleTag,
       language,
-      signature: `${workerState.context.workerId}|${alertPreviewState}|${severity}|${exceeded}|${language}|${specCopy.headline}`,
+      speechLanguageCode: activeLangCode,
+      languageName: activeLangName,
+      languageLabel: activeLangLabel,
+      signature: `${workerState.context.workerId}|${alertPreviewState}|${severity}|${exceeded}|${activeLangCode}|${activeHeadline}`,
     };
   }
 
-  const copy = workerState.alertTranslations[language] ?? workerState.alertTranslations.en;
+  const copy =
+    globalLanguageOverride?.copy ??
+    workerState.alertTranslations[language] ??
+    workerState.alertTranslations.en;
   const { tier, effectiveWbgtC } = workerState.assessment;
   const exceeded = tier === 'Amber' || tier === 'Red';
   const severity: 'nominal' | 'amber' | 'red' =
@@ -110,9 +143,12 @@ export function evaluateHeatThresholdForVoice(params: {
     headline: copy.headline,
     actionText: copy.action,
     spokenText,
-    localeTag,
+    localeTag: activeLocaleTag,
     language,
-    signature: `${workerState.context.workerId}|live|${severity}|${exceeded}|${language}|${copy.headline}`,
+    speechLanguageCode: activeLangCode,
+    languageName: activeLangName,
+    languageLabel: activeLangLabel,
+    signature: `${workerState.context.workerId}|live|${severity}|${exceeded}|${activeLangCode}|${copy.headline}`,
   };
 }
 
@@ -137,6 +173,16 @@ function pickBestSpeechVoice(
   return null;
 }
 
+function base64ToAudioBlobUrl(audioBase64: string, mimeType: string): string {
+  const binaryString = window.atob(audioBase64);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i += 1) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  const blob = new Blob([bytes], { type: mimeType || 'audio/wav' });
+  return URL.createObjectURL(blob);
+}
+
 function readInitialEnabled(): boolean {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY_ENABLED);
@@ -151,8 +197,9 @@ export function useWorkerVoiceAlerts(params: {
   workerState: WorkerStateSelf | null;
   alertPreviewState: WearableAlertStateId;
   tempUnit: TemperatureUnit;
+  globalLanguageOverride?: GlobalLanguageOverride | null;
 }) {
-  const { workerState, alertPreviewState, tempUnit } = params;
+  const { workerState, alertPreviewState, tempUnit, globalLanguageOverride } = params;
   const [enabled, setEnabledState] = useState<boolean>(readInitialEnabled);
   const [speaking, setSpeaking] = useState(false);
   const [lastSpokenAlert, setLastSpokenAlert] = useState<SpokenAlertRecord | null>(null);
@@ -160,6 +207,9 @@ export function useWorkerVoiceAlerts(params: {
 
   const lastTriggeredSignatureRef = useRef<string | null>(null);
   const utteranceSeqRef = useRef(0);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const objectUrlRef = useRef<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const speechSupported =
     typeof window !== 'undefined' &&
@@ -183,12 +233,38 @@ export function useWorkerVoiceAlerts(params: {
         workerState,
         alertPreviewState,
         tempUnit,
+        globalLanguageOverride,
       }),
-    [workerState, alertPreviewState, tempUnit]
+    [workerState, alertPreviewState, tempUnit, globalLanguageOverride]
   );
 
-  const stopSpeaking = useCallback(() => {
-    utteranceSeqRef.current += 1;
+  const revokeObjectUrl = useCallback(() => {
+    if (objectUrlRef.current) {
+      try {
+        URL.revokeObjectURL(objectUrlRef.current);
+      } catch {
+        // Ignore URL cleanup errors
+      }
+      objectUrlRef.current = null;
+    }
+  }, []);
+
+  const stopActivePlayback = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    const audioEl = audioRef.current;
+    if (audioEl) {
+      try {
+        audioEl.pause();
+        audioEl.removeAttribute('src');
+        audioEl.load();
+      } catch {
+        // Ignore audio element cleanup errors
+      }
+    }
+    revokeObjectUrl();
     try {
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
         window.speechSynthesis.cancel();
@@ -196,19 +272,24 @@ export function useWorkerVoiceAlerts(params: {
     } catch {
       // Ignore synthesis cancellation errors in headless environments
     }
-    setSpeaking(false);
-  }, []);
+  }, [revokeObjectUrl]);
 
-  const synthesizeAlert = useCallback(
+  const stopSpeaking = useCallback(() => {
+    utteranceSeqRef.current += 1;
+    stopActivePlayback();
+    setSpeaking(false);
+  }, [stopActivePlayback]);
+
+  const speakViaWebSpeechFallback = useCallback(
     (
       text: string,
       language: SupportedLanguage,
+      localeTag: string,
       severity: 'nominal' | 'amber' | 'red',
-      autoTriggered: boolean
+      autoTriggered: boolean,
+      seq: number
     ) => {
-      if (!text.trim()) return;
-      const localeTag = TTS_LOCALE_BY_LANGUAGE[language] ?? 'en-US';
-      const seq = ++utteranceSeqRef.current;
+      if (utteranceSeqRef.current !== seq) return;
 
       setLastSpokenAlert({
         text,
@@ -216,6 +297,7 @@ export function useWorkerVoiceAlerts(params: {
         localeTag,
         severity,
         autoTriggered,
+        source: 'web_speech',
         timestampIso: new Date().toISOString(),
       });
 
@@ -225,6 +307,7 @@ export function useWorkerVoiceAlerts(params: {
           !('speechSynthesis' in window) ||
           typeof window.SpeechSynthesisUtterance === 'undefined'
         ) {
+          setSpeaking(false);
           return;
         }
         const synth = window.speechSynthesis;
@@ -267,6 +350,123 @@ export function useWorkerVoiceAlerts(params: {
     [voicesVersion]
   );
 
+  const synthesizeAlert = useCallback(
+    async (
+      text: string,
+      language: SupportedLanguage,
+      speechLanguageCode: string,
+      languageName: string,
+      localeTag: string,
+      severity: 'nominal' | 'amber' | 'red',
+      autoTriggered: boolean
+    ) => {
+      if (!text.trim()) return;
+      const seq = ++utteranceSeqRef.current;
+      stopActivePlayback();
+
+      const workerId = workerState?.context.workerId ?? 'W-101';
+
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        speakViaWebSpeechFallback(text, language, localeTag, severity, autoTriggered, seq);
+        return;
+      }
+
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
+      try {
+        setSpeaking(true);
+        const res = await fetch(`/api/worker/${encodeURIComponent(workerId)}/speak`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text,
+            language: speechLanguageCode,
+            localeTag,
+            languageName,
+            severity,
+          }),
+          signal: controller.signal,
+        });
+
+        if (utteranceSeqRef.current !== seq) return;
+
+        if (!res.ok) {
+          speakViaWebSpeechFallback(text, language, localeTag, severity, autoTriggered, seq);
+          return;
+        }
+
+        const data = (await res.json()) as {
+          audioBase64?: string;
+          mimeType?: string;
+          voiceName?: string;
+        };
+
+        if (utteranceSeqRef.current !== seq) return;
+
+        if (!data.audioBase64) {
+          speakViaWebSpeechFallback(text, language, localeTag, severity, autoTriggered, seq);
+          return;
+        }
+
+        const mimeType = data.mimeType || 'audio/wav';
+        const objectUrl = base64ToAudioBlobUrl(data.audioBase64, mimeType);
+        revokeObjectUrl();
+        objectUrlRef.current = objectUrl;
+
+        const audioEl = audioRef.current ?? new Audio();
+        audioEl.onended = () => {
+          if (utteranceSeqRef.current === seq) {
+            setSpeaking(false);
+          }
+        };
+        audioEl.onerror = () => {
+          if (utteranceSeqRef.current === seq) {
+            setSpeaking(false);
+          }
+        };
+        audioEl.src = objectUrl;
+
+        setLastSpokenAlert({
+          text,
+          language,
+          localeTag,
+          severity,
+          autoTriggered,
+          source: 'cloud_tts',
+          voiceName: data.voiceName,
+          timestampIso: new Date().toISOString(),
+        });
+
+        try {
+          await audioEl.play();
+        } catch (playErr) {
+          if (utteranceSeqRef.current !== seq) return;
+          const errName = playErr instanceof Error ? playErr.name : '';
+          if (errName === 'NotSupportedError') {
+            speakViaWebSpeechFallback(text, language, localeTag, severity, autoTriggered, seq);
+          } else {
+            // Autoplay blocked prior to user gesture or interrupted cleanly: preserve cloud_tts state
+            setSpeaking(false);
+          }
+        }
+      } catch (err) {
+        if (controller.signal.aborted || utteranceSeqRef.current !== seq) {
+          return;
+        }
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          return;
+        }
+        speakViaWebSpeechFallback(text, language, localeTag, severity, autoTriggered, seq);
+      } finally {
+        if (abortControllerRef.current === controller) {
+          abortControllerRef.current = null;
+        }
+      }
+    },
+    [revokeObjectUrl, speakViaWebSpeechFallback, stopActivePlayback, workerState?.context.workerId]
+  );
+
   // Automatic voice-synthesis trigger whenever heat thresholds are exceeded
   // or worker switches preferred language while threshold remains exceeded
   useEffect(() => {
@@ -285,9 +485,12 @@ export function useWorkerVoiceAlerts(params: {
     }
 
     lastTriggeredSignatureRef.current = evaluation.signature;
-    synthesizeAlert(
+    void synthesizeAlert(
       evaluation.spokenText,
       evaluation.language,
+      evaluation.speechLanguageCode,
+      evaluation.languageName,
+      evaluation.localeTag,
       evaluation.severity,
       true
     );
@@ -313,9 +516,12 @@ export function useWorkerVoiceAlerts(params: {
 
   const speakNow = useCallback(() => {
     if (!evaluation.spokenText) return;
-    synthesizeAlert(
+    void synthesizeAlert(
       evaluation.spokenText,
       evaluation.language,
+      evaluation.speechLanguageCode,
+      evaluation.languageName,
+      evaluation.localeTag,
       evaluation.severity,
       false
     );
@@ -325,7 +531,8 @@ export function useWorkerVoiceAlerts(params: {
     enabled,
     setEnabled,
     speaking,
-    speechSupported,
+    speechSupported: true,
+    audioRef,
     evaluation,
     lastSpokenAlert,
     speakNow,

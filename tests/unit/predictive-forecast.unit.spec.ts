@@ -381,14 +381,14 @@ describe('Predictive Forecast Engine & LLM Safety Boundary', () => {
       expect(sanitized[lang].explanation).not.toContain('36 minutes');
     }
     expect(sanitized.en.proactiveForecastNote).toContain('No Amber or Red threshold crossing');
-    // Missing ar/ta/ml/ne keys in partial LLM JSON fall back safely to deterministic localized templates
-    for (const addedLang of ['ar', 'ta', 'ml', 'ne'] as const) {
+    // Missing ar/ta/ml/ne/si keys in partial LLM JSON fall back safely to deterministic localized templates
+    for (const addedLang of ['ar', 'ta', 'ml', 'ne', 'si'] as const) {
       expect(sanitized[addedLang].headline.length).toBeGreaterThan(2);
       expect(sanitized[addedLang].proactiveForecastNote?.length ?? 0).toBeGreaterThan(5);
     }
   });
 
-  it('supports all 9 Dubai/UAE languages in deterministic fallback and blocks Tamil/Arabic/Malayalam/Nepali ETA hallucinations', async () => {
+  it('supports all 10 Dubai/UAE languages in deterministic fallback and blocks Tamil/Arabic/Malayalam/Nepali/Sinhala ETA hallucinations', async () => {
     const {
       clearAlertTranslationCache,
       getMultilingualWorkerAlert,
@@ -409,8 +409,8 @@ describe('Predictive Forecast Engine & LLM Safety Boundary', () => {
     };
 
     const ctx: WorkerContext = {
-      workerId: 'W-9LANG-1',
-      deviceId: 'BLE-9L',
+      workerId: 'W-10LANG-1',
+      deviceId: 'BLE-10L',
       roleLabel: 'Crane Signalman',
       zone: 'Zone C · Dubai Marina',
       ppeLevel: 'Standard Coverall',
@@ -469,12 +469,19 @@ describe('Predictive Forecast Engine & LLM Safety Boundary', () => {
           action: 'पानी पिउनुहोस्।',
           proactiveForecastNote: '२ मिनेटमा चेतावनी पुग्नेछ।',
         },
+        si: {
+          headline: 'වැඩ කිරීමට ආරක්ෂිතයි',
+          explanation: 'තාප පීඩනය අඩු වෙමින් පවතී.',
+          action: 'ජලය පානය කරන්න.',
+          proactiveForecastNote: 'විනාඩි 2කින් ඇම්බර් අනතුරු ඇඟවීම වෙත ළඟා වේ.',
+        },
       }),
     });
 
     const out = await getMultilingualWorkerAlert(ctx, assessment, coolingForecast, ENV_SAMPLE);
+    expect(SUPPORTED_LANGUAGES).toHaveLength(10);
     expect(Object.keys(out).sort()).toEqual([...SUPPORTED_LANGUAGES].sort());
-    for (const lang of ['ar', 'ta', 'ml', 'ne'] as const) {
+    for (const lang of ['ar', 'ta', 'ml', 'ne', 'si'] as const) {
       expect(out[lang].proactiveForecastNote).not.toMatch(/\b2\b|२/);
     }
   });

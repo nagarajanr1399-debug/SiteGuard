@@ -17,6 +17,7 @@ import { AnimatedMetric } from '../components/PageTransition';
 import { TemperatureThresholdEditor } from '../components/TemperatureThresholdEditor';
 import { UaeSiteHubSimulator } from '../components/UaeSiteHubSimulator';
 import { VoiceCopilotBar, VoiceWaveform, useVoiceSpeechOutput } from '../components/VoiceCopilotBar';
+import { useAbuDhabiClock } from '../hooks/useAbuDhabiClock';
 import { getTierTokens, SG_COLORS, SG_SURFACES } from '../shared/designTokens';
 import { formatTemperature, formatTemperatureText, type TemperatureUnit } from '../shared/temperature';
 import {
@@ -80,6 +81,7 @@ export function SupervisorPage({
   const [generatingBriefing, setGeneratingBriefing] = useState(false);
   const [focusedZone, setFocusedZone] = useState<string>('ALL');
   const { speaking, speak, stopSpeaking } = useVoiceSpeechOutput();
+  const clock = useAbuDhabiClock();
 
   const fetchSnapshot = useCallback(async () => {
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -229,8 +231,14 @@ export function SupervisorPage({
       {/* Futuristic Command Masthead */}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="space-y-2">
-          <div className="text-[11px] font-mono text-[#a5a7ff] tracking-wider uppercase">
-            {activeEnv.emirate ?? 'Abu Dhabi'} · {activeEnv.station}
+          <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono text-[#a5a7ff] tracking-wider uppercase">
+            <span>
+              {activeEnv.emirate ?? 'Abu Dhabi'} · {activeEnv.station}
+            </span>
+            <span className="text-slate-600">·</span>
+            <span className="text-emerald-300">
+              {clock.timeWithSeconds} GST · {clock.middayWindowStatusLabel}
+            </span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
             Supervisor Crew Grid &amp; Dispatch
@@ -409,17 +417,46 @@ export function SupervisorPage({
               >
                 <div>
                   <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-xs text-slate-400">
-                        <span className="font-mono font-semibold text-[#a5a7ff]">{w.workerId}</span> · {w.zone}
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {/* 36px Watch-Synced Radial Tier Complication (Zero Raw Vitals) */}
+                      <div className="relative w-9 h-9 shrink-0 flex items-center justify-center">
+                        <svg viewBox="0 0 36 36" className="w-9 h-9 -rotate-90" aria-hidden="true">
+                          <circle cx="18" cy="18" r="14" fill="none" stroke="#0c111d" strokeWidth="3.5" />
+                          <circle
+                            cx="18"
+                            cy="18"
+                            r="14"
+                            fill="none"
+                            stroke={tokens.hex}
+                            strokeWidth="3.5"
+                            strokeLinecap="round"
+                            strokeDasharray={`${((progressRatio / 100) * 87.96).toFixed(1)} 88`}
+                          />
+                        </svg>
+                        <span
+                          className="absolute text-[9px] font-mono font-bold"
+                          style={{ color: tokens.hex }}
+                        >
+                          {w.tier[0]}
+                        </span>
                       </div>
-                      <h3 className="text-base font-bold text-white mt-0.5">{w.roleLabel}</h3>
+                      <div className="min-w-0">
+                        <div className="text-xs text-slate-400 truncate">
+                          <span className="font-mono font-semibold text-[#a5a7ff]">{w.workerId}</span> · {w.zone}
+                        </div>
+                        <h3 className="text-base font-bold text-white mt-0.5 truncate">{w.roleLabel}</h3>
+                      </div>
                     </div>
-                    <div
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-mono font-bold ${tokens.pillClass}`}
-                    >
-                      <Icon className="w-3.5 h-3.5 shrink-0" />
-                      <span>{w.tier.toUpperCase()}</span>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <div
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-mono font-bold ${tokens.pillClass}`}
+                      >
+                        <Icon className="w-3.5 h-3.5 shrink-0" />
+                        <span>{w.tier.toUpperCase()}</span>
+                      </div>
+                      <span className="text-[10px] font-mono tabular-nums text-slate-400">
+                        BAT {Math.round(w.deviceBatteryPct ?? 88)}% · T+{w.simulatedClockMin ?? 12}m
+                      </span>
                     </div>
                   </div>
 

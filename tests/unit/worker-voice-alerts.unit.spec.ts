@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { evaluateHeatThresholdForVoice } from '../../src/hooks/useWorkerVoiceAlerts.ts';
 import {
+  GLOBAL_WORKFORCE_LANGUAGES,
+  getGlobalLanguageByCode,
+} from '../../src/shared/globalLanguages.ts';
+import {
   SUPPORTED_LANGUAGES,
   TTS_LOCALE_BY_LANGUAGE,
   type SupportedLanguage,
@@ -145,7 +149,7 @@ describe('Worker Voice-Synthesis Threshold Evaluation', () => {
     expect(redEval.spokenText).toContain('STOP WORK NOW');
   });
 
-  it('produces localized alert copy and proper BCP-47 locale tags for all 9 Dubai/UAE languages', () => {
+  it('produces localized alert copy and proper BCP-47 locale tags for all 10 Dubai/UAE languages including Sinhala', () => {
     const taEval = evaluateHeatThresholdForVoice({
       workerState: makeWorkerState('Red', 'ta'),
       alertPreviewState: 'live',
@@ -164,6 +168,17 @@ describe('Worker Voice-Synthesis Threshold Evaluation', () => {
     expect(arEval.localeTag).toBe('ar-AE');
     expect(arEval.spokenText).toContain('أوقف العمل فوراً');
 
+    const siEval = evaluateHeatThresholdForVoice({
+      workerState: makeWorkerState('Red', 'si'),
+      alertPreviewState: 'high_heat',
+      tempUnit: 'C',
+    });
+    expect(siEval.exceeded).toBe(true);
+    expect(siEval.localeTag).toBe('si-LK');
+    expect(siEval.languageName).toBe('Sinhala');
+    expect(siEval.spokenText).toMatch(/[\u0D80-\u0DFF]{3,}/);
+
+    expect(SUPPORTED_LANGUAGES).toHaveLength(10);
     for (const lang of SUPPORTED_LANGUAGES) {
       const res = evaluateHeatThresholdForVoice({
         workerState: makeWorkerState('Red', lang),
@@ -194,5 +209,34 @@ describe('Worker Voice-Synthesis Threshold Evaluation', () => {
     expect(highHeat.severity).toBe('red');
     expect(highHeat.localeTag).toBe('hi-IN');
     expect(highHeat.spokenText).toContain('99');
+  });
+
+  it('supports 100+ Abu Dhabi workforce languages via globalLanguageOverride and BCP-47 locales', () => {
+    expect(GLOBAL_WORKFORCE_LANGUAGES.length).toBeGreaterThanOrEqual(100);
+    const telugu = getGlobalLanguageByCode('te');
+    const persian = getGlobalLanguageByCode('fa');
+    expect(telugu?.bcp47).toBe('te-IN');
+    expect(persian?.rtl).toBe(true);
+
+    const teEval = evaluateHeatThresholdForVoice({
+      workerState: makeWorkerState('Red', 'en'),
+      alertPreviewState: 'live',
+      tempUnit: 'C',
+      globalLanguageOverride: {
+        option: telugu!,
+        copy: {
+          headline: 'పనిని వెంటనే ఆపండి',
+          explanation: 'అధిక వేడి ఒత్తిడి',
+          action: 'నీడలోకి వెళ్లండి మరియు నీరు తాగండి.',
+          proactiveForecastNote: null,
+          source: 'gemini',
+          cached: false,
+        },
+      },
+    });
+    expect(teEval.exceeded).toBe(true);
+    expect(teEval.localeTag).toBe('te-IN');
+    expect(teEval.languageLabel).toBe('తెలుగు');
+    expect(teEval.spokenText).toContain('పనిని వెంటనే ఆపండి');
   });
 });

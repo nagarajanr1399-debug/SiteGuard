@@ -11,8 +11,33 @@ import {
 
 export function useVoiceSpeechOutput() {
   const [speaking, setSpeaking] = useState(false);
+  const seqRef = useRef(0);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const objectUrlRef = useRef<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
-  const stopSpeaking = useCallback(() => {
+  const cleanupAudio = useCallback(() => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    if (audioRef.current) {
+      try {
+        audioRef.current.pause();
+        audioRef.current.removeAttribute('src');
+      } catch {
+        // Ignore cleanup errors
+      }
+      audioRef.current = null;
+    }
+    if (objectUrlRef.current) {
+      try {
+        URL.revokeObjectURL(objectUrlRef.current);
+      } catch {
+        // Ignore revoke errors
+      }
+      objectUrlRef.current = null;
+    }
     try {
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
         window.speechSynthesis.cancel();
@@ -20,30 +45,106 @@ export function useVoiceSpeechOutput() {
     } catch {
       // Ignore synthesis cancellation errors in headless environments
     }
+  }, []);
+
+  const stopSpeaking = useCallback(() => {
+    seqRef.current += 1;
+    cleanupAudio();
     setSpeaking(false);
+  }, [cleanupAudio]);
+
+  const speakWebFallback = useCallback((text: string, lang: SupportedLanguage, seq: number) => {
+    if (seqRef.current !== seq) return;
+    try {
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+        setSpeaking(false);
+        return;
+      }
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = TTS_LOCALE_BY_LANGUAGE[lang] ?? 'en-US';
+      utterance.rate = 1.02;
+      utterance.pitch = 1.0;
+      utterance.onend = () => {
+        if (seqRef.current === seq) setSpeaking(false);
+      };
+      utterance.onerror = () => {
+        if (seqRef.current === seq) setSpeaking(false);
+      };
+      setSpeaking(true);
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      if (seqRef.current === seq) setSpeaking(false);
+    }
   }, []);
 
   const speak = useCallback(
-    (text: string, lang: SupportedLanguage = 'en') => {
+    async (text: string, lang: SupportedLanguage = 'en') => {
       if (!text.trim()) return;
-      stopSpeaking();
+      const seq = ++seqRef.current;
+      cleanupAudio();
+
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        speakWebFallback(text, lang, seq);
+        return;
+      }
+
+      const controller = new AbortController();
+      abortRef.current = controller;
+
       try {
-        if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+        setSpeaking(true);
+        const res = await fetch('/api/worker/W-101/speak', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text,
+            language: lang,
+            localeTag: TTS_LOCALE_BY_LANGUAGE[lang] ?? 'en-US',
+            severity: 'nominal',
+          }),
+          signal: controller.signal,
+        });
+        if (seqRef.current !== seq) return;
+
+        if (!res.ok) {
+          speakWebFallback(text, lang, seq);
           return;
         }
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = TTS_LOCALE_BY_LANGUAGE[lang] ?? 'en-US';
-        utterance.rate = 1.02;
-        utterance.pitch = 1.0;
-        utterance.onend = () => setSpeaking(false);
-        utterance.onerror = () => setSpeaking(false);
-        setSpeaking(true);
-        window.speechSynthesis.speak(utterance);
-      } catch {
-        setSpeaking(false);
+        const data = (await res.json()) as { audioBase64?: string; mimeType?: string };
+        if (seqRef.current !== seq || !data.audioBase64) {
+          if (seqRef.current === seq) speakWebFallback(text, lang, seq);
+          return;
+        }
+
+        const binary = window.atob(data.audioBase64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        const blob = new Blob([bytes], { type: data.mimeType || 'audio/wav' });
+        const url = URL.createObjectURL(blob);
+        objectUrlRef.current = url;
+
+        const audio = new Audio(url);
+        audioRef.current = audio;
+        audio.onended = () => {
+          if (seqRef.current === seq) setSpeaking(false);
+        };
+        audio.onerror = () => {
+          if (seqRef.current === seq) setSpeaking(false);
+        };
+        await audio.play();
+      } catch (err) {
+        if (controller.signal.aborted || seqRef.current !== seq) return;
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        speakWebFallback(text, lang, seq);
+      } finally {
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+        }
       }
     },
-    [stopSpeaking]
+    [cleanupAudio, speakWebFallback]
   );
 
   useEffect(() => () => stopSpeaking(), [stopSpeaking]);
@@ -225,7 +326,7 @@ export function VoiceCopilotBar({
               <VoiceWaveform active={listening || speaking || processing} />
             </div>
             <p className="text-[11px] text-slate-400">
-              Hands-free voice dispatch, Dubai/Abu Dhabi hub switching, and 9-language TTS readout.
+              Hands-free voice dispatch, Dubai/Abu Dhabi hub switching, and 10-language Cloud TTS readout.
             </p>
           </div>
         </div>

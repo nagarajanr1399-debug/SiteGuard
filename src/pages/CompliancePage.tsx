@@ -12,6 +12,7 @@ import {
 import { AnimatedMetric } from '../components/PageTransition';
 import { UaeSiteHubSimulator } from '../components/UaeSiteHubSimulator';
 import { VoiceCopilotBar, VoiceWaveform, useVoiceSpeechOutput } from '../components/VoiceCopilotBar';
+import { useAbuDhabiClock } from '../hooks/useAbuDhabiClock';
 import { SG_SURFACES } from '../shared/designTokens';
 import type { TemperatureUnit } from '../shared/temperature';
 import type {
@@ -46,6 +47,7 @@ export function CompliancePage({
   const [narrativeLang, setNarrativeLang] = useState<'en' | 'ar'>('en');
   const [simBusy, setSimBusy] = useState(false);
   const { speaking, speak, stopSpeaking } = useVoiceSpeechOutput();
+  const clock = useAbuDhabiClock();
 
   // Insurer / Regulator export metadata fields
   const [mohreId, setMohreId] = useState('EST-AUH-88412');
@@ -280,11 +282,12 @@ export function CompliancePage({
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <div className="text-xs font-mono text-[#787aff] font-semibold">
-                  SITEGUARD COMPLIANCE RECORD · GENOS TEAM
+                  SITEGUARD COMPLIANCE RECORD · GENOS TEAM · LIVE AUH {clock.timeWithSeconds} GST
                 </div>
                 <h2 className="text-xl font-bold text-white mt-0.5">{report.siteName}</h2>
                 <p className="text-xs text-slate-400 mt-1">
-                  {report.emirate} · Mandatory Break Window: <span className="font-mono">12:30–15:00 GST</span> (June 15 – September 15)
+                  {report.emirate} · Mandatory Break Window: <span className="font-mono">12:30–15:00 GST</span> (June 15 – September 15) ·{' '}
+                  <span className="font-mono text-emerald-300">{clock.middayWindowStatusLabel}</span>
                 </p>
               </div>
 

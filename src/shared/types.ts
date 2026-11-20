@@ -9,7 +9,8 @@ export type SupportedLanguage =
   | 'tl'
   | 'ta'
   | 'ml'
-  | 'ne';
+  | 'ne'
+  | 'si';
 
 export const SUPPORTED_LANGUAGES: SupportedLanguage[] = [
   'en',
@@ -21,6 +22,7 @@ export const SUPPORTED_LANGUAGES: SupportedLanguage[] = [
   'ta',
   'ml',
   'ne',
+  'si',
 ];
 
 export const LANGUAGE_LABELS: Record<
@@ -36,6 +38,7 @@ export const LANGUAGE_LABELS: Record<
   ta: { name: 'Tamil', native: 'தமிழ்' },
   ml: { name: 'Malayalam', native: 'മലയാളം' },
   ne: { name: 'Nepali', native: 'नेपाली' },
+  si: { name: 'Sinhala', native: 'සිංහල' },
 };
 
 export function isRtlLanguage(lang: SupportedLanguage): boolean {
@@ -52,6 +55,7 @@ export const TTS_LOCALE_BY_LANGUAGE: Record<SupportedLanguage, string> = {
   ta: 'ta-IN',
   ml: 'ml-IN',
   ne: 'ne-NP',
+  si: 'si-LK',
 };
 
 export type PPELevel = 'Standard Coverall' | 'FR / Arc-Flash' | 'Chemical / Tyvek';

@@ -1,9 +1,11 @@
+import type { RefObject } from 'react';
 import { Volume2, VolumeX } from 'lucide-react';
 import type {
   HeatThresholdVoiceEvaluation,
   SpokenAlertRecord,
 } from '../hooks/useWorkerVoiceAlerts';
 import { SG_SURFACES } from '../shared/designTokens';
+import type { GlobalLanguageOption } from '../shared/globalLanguages';
 import { isRtlLanguage, LANGUAGE_LABELS, type SupportedLanguage } from '../shared/types';
 import { VoiceWaveform } from './VoiceCopilotBar';
 
@@ -12,8 +14,10 @@ interface WorkerVoiceAlertBarProps {
   onToggleEnabled: (next: boolean) => void;
   speaking: boolean;
   language: SupportedLanguage;
+  globalLanguageOption?: GlobalLanguageOption | null;
   evaluation: HeatThresholdVoiceEvaluation;
   lastSpokenAlert: SpokenAlertRecord | null;
+  audioRef?: RefObject<HTMLAudioElement | null>;
   onSpeakNow: () => void;
   onStopSpeaking: () => void;
 }
@@ -23,13 +27,24 @@ export function WorkerVoiceAlertBar({
   onToggleEnabled,
   speaking,
   language,
+  globalLanguageOption,
   evaluation,
   lastSpokenAlert,
+  audioRef,
   onSpeakNow,
   onStopSpeaking,
 }: WorkerVoiceAlertBarProps) {
   const langMeta = LANGUAGE_LABELS[language];
-  const isRtl = isRtlLanguage(language);
+  const displayNative = globalLanguageOption?.nativeName ?? langMeta.native;
+  const displayName = globalLanguageOption?.name ?? langMeta.name;
+  const isRtl = globalLanguageOption?.rtl ?? isRtlLanguage(language);
+
+  const engineLabel =
+    lastSpokenAlert?.source === 'cloud_tts'
+      ? `Gemini Cloud TTS${lastSpokenAlert.voiceName ? ` (${lastSpokenAlert.voiceName})` : ''}`
+      : lastSpokenAlert?.source === 'web_speech'
+        ? 'Offline Web Speech Fallback'
+        : 'Gemini Cloud TTS · Auto-Fallback';
 
   const containerRing =
     !enabled
@@ -45,6 +60,12 @@ export function WorkerVoiceAlertBar({
       data-testid="worker-voice-alert-controls"
       className={`${SG_SURFACES.panel} border p-4 sm:p-5 space-y-3 transition-colors ${containerRing}`}
     >
+      <audio
+        ref={audioRef}
+        data-testid="worker-voice-audio"
+        preload="auto"
+        className="hidden"
+      />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <span
@@ -69,7 +90,7 @@ export function WorkerVoiceAlertBar({
               data-testid="worker-voice-locale"
               className="text-[11px] font-mono text-slate-400"
             >
-              TTS Voice: {evaluation.localeTag} · {langMeta.native}
+              TTS Voice: {evaluation.localeTag} · {displayNative} · {engineLabel}
             </div>
           </div>
         </div>
@@ -114,6 +135,7 @@ export function WorkerVoiceAlertBar({
       <div
         data-testid="worker-voice-alert-status"
         data-spoken-text={lastSpokenAlert?.text ?? evaluation.spokenText}
+        data-voice-source={lastSpokenAlert?.source ?? 'idle'}
         aria-live="polite"
         className={`rounded-xl border px-3.5 py-2.5 text-xs ${
           !enabled
@@ -128,7 +150,7 @@ export function WorkerVoiceAlertBar({
         {!enabled ? (
           <span>
             Audible synthesis muted. Turn Auto Voice ON to speak heat safety alerts in{' '}
-            {langMeta.name} ({evaluation.localeTag}) when limits are exceeded.
+            {displayName} ({evaluation.localeTag}) when limits are exceeded.
           </span>
         ) : evaluation.exceeded ? (
           <div className="space-y-1">
@@ -146,7 +168,7 @@ export function WorkerVoiceAlertBar({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span>
               <strong className="font-mono text-emerald-300">ARMED · STANDBY</strong> — Speaks
-              automatically in {langMeta.native} ({evaluation.localeTag}) if heat thresholds are
+              automatically in {displayNative} ({evaluation.localeTag}) if heat thresholds are
               exceeded.
             </span>
           </div>
